@@ -1,0 +1,18 @@
+# Text files
+.gitattributes text eol=lf
+.gitignore text eol=lf
+*.m text eol=lf
+*.txt text eol=lf
+*.md text eol=lf
+LICENSE text eol=lf
+
+# MATLAB and archive binaries
+*.mat binary
+*.fig binary
+*.mlx binary
+*.mlapp binary
+*.slx binary
+*.mdl binary
+*.tar binary
+*.zip binary
+*.eps text eol=lf

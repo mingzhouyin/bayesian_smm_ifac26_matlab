@@ -1,0 +1,22 @@
+# MATLAB autosave and backup files
+*.asv
+*.m~
+*.bak
+
+# MATLAB generated folders
+slprj/
+codegen/
+.SimulinkProject/
+*.slxc
+
+# Local logs and transient command output
+*.log
+*_output*.txt
+my_output.txt
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
