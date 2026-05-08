@@ -1,7 +1,7 @@
 % Unified data-driven SMM MM comparison script.
 %
-% The experiment is configured by a single cfg struct. Smooth and predict
-% share the same Bayesian trajectory-estimation pipeline; the task only
+% The experiment is configured by a single cfg struct. Smooth, predict, and
+% control share the same Bayesian trajectory-estimation pipeline; the task only
 % changes Phi, the measured vector zeta, exact-input constraints, and the
 % target output indices used for RMSE/coverage.
 %
@@ -17,6 +17,17 @@
 %   cfg.noise.inputNoise = true;
 %   cfg.noise.distribution = 'gaussian';
 %   cfg.experiment.seed = 3;
+%   run('bayesSMMUnifiedMMCompare.m')
+%
+% Control-task example:
+%   cfg = struct();
+%   cfg.task = 'control';
+%   cfg.system.model = 'controlToeplitz';
+%   cfg.noise.distribution = 'gaussian';
+%   cfg.noise.inputNoise = false;
+%   cfg.noise.correlation = 0.95;
+%   cfg.noise.y_data_var = 1e-2;
+%   cfg.noise.y_var = 1e-2;
 %   run('bayesSMMUnifiedMMCompare.m')
 %
 % Copyright 2026 Leibniz University Hannover, Mingzhou Yin
@@ -182,7 +193,7 @@ function results = run_bayes_smm_mm_compare(cfg)
         hbMinEigJgg(ii) = laplaceInfo.minEigJgg;
         hbMinEigSchurG(ii) = laplaceInfo.minEigSchurG;
 
-        targetTrue = data.z_true(model.targetIdx);
+        targetTrue = model.targetTrue;
         [hbLaplaceTarget90Inside(ii), hbLaplaceTarget90Stat(ii), hbLaplaceTarget90Threshold(ii)] = ...
             confidence_region_contains(targetTrue - z_est6(model.targetIdx), ...
             hbLaplaceCovTarget{ii}, 0.90, cfg, mm.jitter);
@@ -201,8 +212,8 @@ function results = run_bayes_smm_mm_compare(cfg)
 
         estimates = {z_est1, z_est2, z_est3, z_est4, z_est5, z_est6};
         for jj = 1:numMethods
-            errory(ii, jj) = norm(estimates{jj}(model.targetIdx) - targetTrue) ...
-                /sqrt(numel(model.targetIdx));
+            errory(ii, jj) = norm(estimates{jj}(model.errorIdx) - model.errorTrue) ...
+                /sqrt(numel(model.errorIdx));
         end
 
         if ~ebInfo.solved
@@ -249,15 +260,22 @@ function cfg = default_bayes_smm_mm_compare_config()
     cfg.system.nu = 1;
     cfg.system.ny = 1;
     cfg.system.maxPoleMagnitude = 0.95;
+    cfg.system.model = 'random';
+    cfg.system.alpha = 0.4;
+    cfg.system.beta = 0.3;
     cfg.data.N = 100;
     cfg.data.L = 40;
     cfg.noise.distribution = 'studentT';
     cfg.noise.inputNoise = false;
     cfg.noise.dof = 10;
+    cfg.noise.correlation = 0;
     cfg.noise.u_data_var = 1e-4;
     cfg.noise.y_data_var = 1e-4;
     cfg.noise.u_var = 1e-2;
     cfg.noise.y_var = 1e-2;
+    cfg.control.q = 5;
+    cfg.control.r = 0.5;
+    cfg.control.referencePattern = [1; -1; 1];
     cfg.mm.maxIter = 100;
     cfg.mm.tol = 1e-3;
     cfg.mm.eta = 1e-4;
@@ -280,9 +298,10 @@ function cfg = default_bayes_smm_mm_compare_config()
 end
 
 function cfg = finalize_bayes_smm_mm_compare_config(cfg)
-    cfg.task = validatestring(cfg.task, {'smooth', 'predict'});
+    cfg.task = validatestring(cfg.task, {'smooth', 'predict', 'control'});
     cfg.noise.distribution = validatestring(cfg.noise.distribution, ...
         {'gaussian', 'studentT', 'ellipticalT'});
+    cfg.system.model = validatestring(cfg.system.model, {'random', 'controlToeplitz'});
     if strcmpi(cfg.noise.distribution, 'ellipticalT')
         cfg.noise.distribution = 'studentT';
     end
@@ -345,37 +364,91 @@ function dims = make_dimensions(cfg)
     dims.Lf = dims.L - dims.L0;
     dims.idx_u = dims.L*dims.nu;
     dims.idx_y = dims.L*dims.ny;
+    dims.idx_up = dims.L0*dims.nu;
+    dims.idx_uf = dims.Lf*dims.nu;
     dims.idx_yp = dims.L0*dims.ny;
     dims.idx_yf = dims.Lf*dims.ny;
     dims.nz = dims.idx_u + dims.idx_y;
     dims.uIdx = 1:dims.idx_u;
+    dims.upIdx = 1:dims.idx_up;
+    dims.ufIdx = dims.idx_up + (1:dims.idx_uf);
     dims.yIdx = dims.idx_u + (1:dims.idx_y);
     dims.ypIdx = dims.idx_u + (1:dims.idx_yp);
     dims.yfIdx = dims.idx_u + dims.idx_yp + (1:dims.idx_yf);
 end
 
 %% Model construction
+function trueSys = make_true_system(cfg, dims)
+    switch lower(cfg.system.model)
+        case 'controltoeplitz'
+            alpha = cfg.system.alpha;
+            beta = cfg.system.beta;
+            firstColumn = [1 - 2*alpha - beta; alpha; zeros(dims.nx-2, 1)];
+            A = toeplitz(firstColumn);
+            A(1, 1) = 1 - alpha - beta;
+            A(end, end) = 1 - alpha - beta;
+            B = [1; zeros(dims.nx-1, 1)];
+            C = [1 zeros(1, dims.nx-1)];
+            D = 0;
+            trueSys = ss(A, B, C, D, -1);
+        case 'random'
+            trueSys = drss(dims.nx, dims.ny, dims.nu);
+            trueSys.D = 0;
+            while max(abs(pole(trueSys))) > cfg.system.maxPoleMagnitude
+                trueSys = drss(dims.nx, dims.ny, dims.nu);
+                trueSys.D = 0;
+            end
+        otherwise
+            error('Unsupported system model: %s', cfg.system.model);
+    end
+    trueSys = trueSys/norm(trueSys);
+end
+
 function data = simulate_bayes_smm_data(cfg, dims)
     % Generate one stable LTI system plus offline data (ud, yd) and online
     % task data (u, y). The *_dist variables are the actually observed
     % noisy trajectories used to build Hankel matrices and zeta.
-    trueSys = drss(dims.nx, dims.ny, dims.nu);
-    trueSys.D = 0;
-    while max(abs(pole(trueSys))) > cfg.system.maxPoleMagnitude
-        trueSys = drss(dims.nx, dims.ny, dims.nu);
-        trueSys.D = 0;
-    end
-    trueSys = trueSys/norm(trueSys);
+    trueSys = make_true_system(cfg, dims);
 
     ud = randn(dims.N, dims.nu);
     yd = lsim(trueSys, ud);
-    u = randn(dims.L, dims.nu);
-    y = lsim(trueSys, u);
 
     ud_dist = ud + draw_noise(size(ud), effective_var(cfg, 'u_data'), cfg);
     yd_dist = yd + draw_noise(size(yd), cfg.noise.y_data_var, cfg);
-    u_dist = u + draw_noise(size(u), effective_var(cfg, 'u_online'), cfg);
-    y_dist = y + draw_noise(size(y), cfg.noise.y_var, cfg);
+
+    if strcmpi(cfg.task, 'control')
+        uPast = randn(dims.L0, dims.nu);
+        [yPast, ~, xPast] = lsim(trueSys, uPast);
+        x0 = trueSys.A*xPast(end, :)' + trueSys.B*uPast(end, :)';
+        [uref, yref] = control_reference(cfg, dims, trueSys);
+        [freeYTrue, TuTrue] = output_prediction_matrices(trueSys.A, ...
+            trueSys.B, trueSys.C, x0, dims.idx_yf);
+        uOracle = solve_regularized_quadratic( ...
+            cfg.control.r*eye(dims.idx_uf) + cfg.control.q*(TuTrue'*TuTrue), ...
+            cfg.control.r*uref + cfg.control.q*TuTrue'*(yref - freeYTrue), ...
+            cfg.mm.jitter);
+        yOracle = freeYTrue + TuTrue*uOracle;
+
+        u = [uPast; reshape(uOracle, [], dims.nu)];
+        y = [yPast; reshape(yOracle, [], dims.ny)];
+        uPastDist = uPast + draw_noise(size(uPast), effective_var(cfg, 'u_online'), cfg);
+        yPastDist = yPast + draw_noise(size(yPast), cfg.noise.y_var, cfg);
+        u_dist = [uPastDist; reshape(uref, [], dims.nu)];
+        y_dist = [yPastDist; reshape(yref, [], dims.ny)];
+
+        data.x0 = x0;
+        data.uref = uref;
+        data.yref = yref;
+        data.u_oracle = uOracle;
+        data.y_oracle = yOracle;
+        data.controlOracleCost = cfg.control.r*sum((uOracle - uref).^2) ...
+            + cfg.control.q*sum((yOracle - yref).^2);
+    else
+        u = randn(dims.L, dims.nu);
+        y = lsim(trueSys, u);
+        u_dist = u + draw_noise(size(u), effective_var(cfg, 'u_online'), cfg);
+        y_dist = y + draw_noise(size(y), cfg.noise.y_var, cfg);
+    end
 
     data.trueSys = trueSys;
     data.ud = ud;
@@ -391,6 +464,31 @@ function data = simulate_bayes_smm_data(cfg, dims)
     data.H = [data.Hu; data.Hy];
     data.z_true = [u(:); y(:)];
     data.z_dist = [data.u_dist; data.y_dist];
+end
+
+function [uref, yref] = control_reference(cfg, dims, trueSys)
+    pattern = cfg.control.referencePattern(:);
+    if isempty(pattern)
+        pattern = [1; -1; 1];
+    end
+    baseBlock = floor(dims.Lf/numel(pattern));
+    remainder = dims.Lf - baseBlock*numel(pattern);
+    yScalar = zeros(dims.Lf, 1);
+    cursor = 1;
+    for ii = 1:numel(pattern)
+        blockLength = baseBlock + double(ii <= remainder);
+        if blockLength > 0
+            yScalar(cursor:cursor+blockLength-1) = pattern(ii);
+        end
+        cursor = cursor + blockLength;
+    end
+    yref = repmat(yScalar, dims.ny, 1);
+    dcGain = dcgain(trueSys);
+    if all(isfinite(dcGain(:))) && size(dcGain, 2) == dims.nu
+        uref = reshape(pinv(dcGain)*reshape(yref, dims.ny, []), [], 1);
+    else
+        uref = zeros(dims.idx_uf, 1);
+    end
 end
 
 function value = effective_var(cfg, whichVar)
@@ -411,9 +509,32 @@ function noise = draw_noise(sz, variance, cfg)
         noise = zeros(sz);
         return
     end
-    noise = sqrt(variance)*randn(sz);
+    covariance = noise_covariance(variance, sz(1), cfg);
+    noise = chol(make_spd(covariance, cfg.mm.jitter))'*randn(sz);
     if strcmpi(cfg.noise.distribution, 'studentT')
         noise = noise/sqrt(chi2rnd(cfg.noise.dof)/cfg.noise.dof);
+    end
+end
+
+function Sigma = noise_covariance(variance, dim, cfg)
+    if dim == 0 || variance == 0
+        Sigma = zeros(dim, dim);
+        return
+    end
+    rho = noise_correlation(cfg);
+    if rho == 0 || dim == 1
+        Sigma = variance*eye(dim);
+    else
+        Sigma = toeplitz(variance*rho.^(0:dim-1));
+    end
+    Sigma = (Sigma + Sigma')/2;
+end
+
+function rho = noise_correlation(cfg)
+    if isfield(cfg.noise, 'correlation') && ~isempty(cfg.noise.correlation)
+        rho = cfg.noise.correlation;
+    else
+        rho = 0;
     end
 end
 
@@ -424,67 +545,130 @@ function model = build_task_model(cfg, dims, data)
     H = data.H;
     spec = task_observation_spec(cfg, dims, data);
 
-    if cfg.noise.inputNoise
-        obsIdx = [dims.uIdx, spec.yObsIdx];
-        zeta = [data.u_dist; spec.yZeta];
-        sigmaE = diag([cfg.noise.u_var*ones(dims.idx_u, 1); spec.yNoiseVar]);
-        exactIdx = [];
-        exactValue = zeros(0, 1);
-        AeqG = zeros(0, dims.M);
-        beqG = zeros(0, 1);
-    else
-        obsIdx = spec.yObsIdx;
-        zeta = spec.yZeta;
-        sigmaE = diag(spec.yNoiseVar);
-        exactIdx = dims.uIdx;
-        exactValue = data.u_dist;
-        AeqG = data.Hu;
-        beqG = data.u_dist;
-    end
-
     % Phi and Cz are row-selection matrices on z. AeqG/beqG are the matching
     % exact constraints in coefficient space because z = H*g.
-    Phi = selection_matrix(obsIdx, dims.nz);
-    Cz = selection_matrix(exactIdx, dims.nz);
-    hasExactG = ~isempty(exactIdx);
+    Phi = selection_matrix(spec.obsIdx, dims.nz);
+    Cz = selection_matrix(spec.exactIdx, dims.nz);
+    hasExactG = ~isempty(spec.AeqG);
     model.H = H;
     model.Phi = Phi;
     model.PhiH = Phi*H;
-    model.zeta = zeta;
-    model.SigmaE = make_spd(sigmaE, cfg.mm.jitter);
+    model.zeta = spec.zeta;
+    model.SigmaE = make_spd(spec.SigmaE, cfg.mm.jitter);
     model.Robs = chol(model.SigmaE\eye(size(model.SigmaE)));
-    model.obsIdx = obsIdx;
+    model.obsIdx = spec.obsIdx;
     model.targetIdx = spec.targetIdx;
+    model.targetTrue = spec.targetTrue;
     model.targetName = spec.targetName;
+    model.errorIdx = spec.errorIdx;
+    model.errorTrue = spec.errorTrue;
+    model.errorName = spec.errorName;
     model.Cz = Cz;
-    model.exactZValue = exactValue;
-    model.AeqG = AeqG;
-    model.beqG = beqG;
-    model.hasExactZ = ~isempty(exactIdx);
+    model.exactZValue = spec.exactValue;
+    model.AeqG = spec.AeqG;
+    model.beqG = spec.beqG;
+    model.hasExactZ = ~isempty(spec.exactIdx);
     model.hasExactG = hasExactG;
     model.freeZDim = dims.nz - size(Cz, 1);
     model.task = cfg.task;
+    if isfield(spec, 'control')
+        model.control = spec.control;
+    end
 end
 
 function spec = task_observation_spec(cfg, dims, data)
     % The task controls which output samples are observed and which output
     % samples are scored. Input-noise handling is added by build_task_model.
+    spec.exactIdx = [];
+    spec.exactValue = zeros(0, 1);
+    spec.AeqG = zeros(0, dims.M);
+    spec.beqG = zeros(0, 1);
     switch lower(cfg.task)
         case 'smooth'
-            spec.yObsIdx = dims.yIdx;
-            spec.yZeta = data.y_dist;
-            spec.yNoiseVar = cfg.noise.y_var*ones(dims.idx_y, 1);
+            if cfg.noise.inputNoise
+                spec.obsIdx = [dims.uIdx, dims.yIdx];
+                spec.zeta = [data.u_dist; data.y_dist];
+                spec.SigmaE = blkdiag(noise_covariance(cfg.noise.u_var, ...
+                    dims.idx_u, cfg), noise_covariance(cfg.noise.y_var, dims.idx_y, cfg));
+            else
+                spec.obsIdx = dims.yIdx;
+                spec.zeta = data.y_dist;
+                spec.SigmaE = noise_covariance(cfg.noise.y_var, dims.idx_y, cfg);
+                spec.exactIdx = dims.uIdx;
+                spec.exactValue = data.u_dist;
+                spec.AeqG = data.Hu;
+                spec.beqG = data.u_dist;
+            end
             spec.targetIdx = dims.yIdx;
+            spec.targetTrue = data.z_true(spec.targetIdx);
             spec.targetName = 'smoothed output y';
+            spec.errorIdx = spec.targetIdx;
+            spec.errorTrue = spec.targetTrue;
+            spec.errorName = spec.targetName;
         case 'predict'
-            spec.yObsIdx = dims.ypIdx;
-            spec.yZeta = data.y_dist(1:dims.idx_yp);
-            spec.yNoiseVar = cfg.noise.y_var*ones(dims.idx_yp, 1);
+            if cfg.noise.inputNoise
+                spec.obsIdx = [dims.uIdx, dims.ypIdx];
+                spec.zeta = [data.u_dist; data.y_dist(1:dims.idx_yp)];
+                spec.SigmaE = blkdiag(noise_covariance(cfg.noise.u_var, ...
+                    dims.idx_u, cfg), noise_covariance(cfg.noise.y_var, dims.idx_yp, cfg));
+            else
+                spec.obsIdx = dims.ypIdx;
+                spec.zeta = data.y_dist(1:dims.idx_yp);
+                spec.SigmaE = noise_covariance(cfg.noise.y_var, dims.idx_yp, cfg);
+                spec.exactIdx = dims.uIdx;
+                spec.exactValue = data.u_dist;
+                spec.AeqG = data.Hu;
+                spec.beqG = data.u_dist;
+            end
             spec.targetIdx = dims.yfIdx;
+            spec.targetTrue = data.z_true(spec.targetIdx);
             spec.targetName = 'future output y_f';
+            spec.errorIdx = spec.targetIdx;
+            spec.errorTrue = spec.targetTrue;
+            spec.errorName = spec.targetName;
+        case 'control'
+            sigmaEFull = control_sigma_e_full(cfg, dims);
+            if cfg.noise.inputNoise
+                spec.obsIdx = [dims.upIdx, dims.ufIdx, dims.ypIdx, dims.yfIdx];
+                spec.zeta = [data.u_dist(1:dims.idx_up); data.uref; ...
+                    data.y_dist(1:dims.idx_yp); data.yref];
+            else
+                spec.obsIdx = [dims.ufIdx, dims.ypIdx, dims.yfIdx];
+                spec.zeta = [data.uref; data.y_dist(1:dims.idx_yp); data.yref];
+                spec.exactIdx = dims.upIdx;
+                spec.exactValue = data.u_dist(1:dims.idx_up);
+                spec.AeqG = data.Hu(1:dims.idx_up, :);
+                spec.beqG = spec.exactValue;
+            end
+            spec.SigmaE = sigmaEFull(spec.obsIdx, spec.obsIdx);
+            spec.targetIdx = dims.yfIdx;
+            spec.targetTrue = data.y_oracle;
+            spec.targetName = 'oracle-optimal future output y_f';
+            spec.errorIdx = [dims.ufIdx, dims.yfIdx];
+            spec.errorTrue = [data.u_oracle; data.y_oracle];
+            spec.errorName = 'oracle-optimal future trajectory [u_f; y_f]';
+            spec.control.Hup = data.Hu(1:dims.idx_up, :);
+            spec.control.Huf = data.Hu(dims.idx_up+1:end, :);
+            spec.control.Hyp = data.Hy(1:dims.idx_yp, :);
+            spec.control.Hyf = data.Hy(dims.idx_yp+1:end, :);
+            spec.control.uref = data.uref;
+            spec.control.yref = data.yref;
+            spec.control.uPast = data.u_dist(1:dims.idx_up);
+            spec.control.yPast = data.y_dist(1:dims.idx_yp);
         otherwise
             error('Unsupported task: %s', cfg.task);
     end
+end
+
+function SigmaE = control_sigma_e_full(cfg, dims)
+    % Main.tex control uncertainty:
+    % Sigma_e = Sigma_z + Gamma'*(I_{L'} kron Sigma_ctr)*Gamma.
+    SigmaZ = blkdiag(noise_covariance(effective_var(cfg, 'u_online'), ...
+        dims.idx_u, cfg), noise_covariance(cfg.noise.y_var, dims.idx_y, cfg));
+    SigmaCtr = zeros(dims.nz, dims.nz);
+    SigmaCtr(dims.ufIdx, dims.ufIdx) = eye(dims.idx_uf)/cfg.control.r;
+    SigmaCtr(dims.yfIdx, dims.yfIdx) = eye(dims.idx_yf)/cfg.control.q;
+    SigmaE = (SigmaZ + SigmaCtr + SigmaZ' + SigmaCtr')/2;
 end
 
 function S = selection_matrix(indices, width)
@@ -538,6 +722,10 @@ function value = marginal_objective(g, model, dims, cfg)
 end
 
 function g = convex_baseline_g(g0, model, dims, cfg, jitter)
+    if strcmpi(cfg.task, 'control')
+        g = convex_control_baseline_g(g0, model, dims, cfg, jitter);
+        return
+    end
     g = g0;
     iter = 0;
     relStep = inf;
@@ -548,6 +736,22 @@ function g = convex_baseline_g(g0, model, dims, cfg, jitter)
         relStep = norm(gNext - g)/max(1, norm(g));
         g = gNext;
     end
+end
+
+function g = convex_control_baseline_g(g0, model, dims, cfg, jitter)
+    Hup = model.control.Hup;
+    Huf = model.control.Huf;
+    Hyp = model.control.Hyp;
+    Hyf = model.control.Hyf;
+    lambda1 = 1/(sum(g0.^2)*cfg.noise.y_data_var + cfg.noise.y_var);
+    lambda2 = 1/(sum(g0.^2)*cfg.noise.y_data_var + 1/cfg.control.q);
+    lambda = dims.idx_yp*cfg.noise.y_data_var*lambda1 ...
+        + dims.idx_yf*cfg.noise.y_data_var*lambda2;
+    Q = lambda*eye(dims.M) + lambda1*(Hyp'*Hyp) ...
+        + lambda2*(Hyf'*Hyf) + cfg.control.r*(Huf'*Huf);
+    c = lambda1*(Hyp'*model.control.yPast) ...
+        + lambda2*(Hyf'*model.control.yref) + cfg.control.r*(Huf'*model.control.uref);
+    g = equality_constrained_quadratic(Q, c, Hup, model.control.uPast, jitter);
 end
 
 function [Q, c] = convex_sqp_quadratic_model(g, model, dims, cfg, jitter)
@@ -592,10 +796,44 @@ function z = subspace_baseline(~, data, dims, cfg)
             y_est = compare(iddata(data.y_dist, data.u_dist), sys);
             z = data.z_dist;
             z(dims.yfIdx) = y_est(dims.idx_yp+1:end).OutputData;
+        case 'control'
+            X_filt = KF_RTS(data.y_dist(1:dims.idx_yp)', sys.A, sys.C, ...
+                sys.NoiseVariance*sys.K*sys.K', ...
+                sys.NoiseVariance*ones(dims.ny, 1), ...
+                B=sys.B, u=data.u_dist(1:dims.idx_up));
+            x0hat = sys.A*X_filt(:, end) + sys.B*data.u_dist(dims.idx_up);
+            [freeY, Tu] = output_prediction_matrices(sys.A, sys.B, sys.C, ...
+                x0hat, dims.idx_yf);
+            uFuture = solve_regularized_quadratic( ...
+                cfg.control.r*eye(dims.idx_uf) + cfg.control.q*(Tu'*Tu), ...
+                cfg.control.r*data.uref + cfg.control.q*Tu'*(data.yref - freeY), ...
+                cfg.mm.jitter);
+            z = data.z_dist;
+            z(dims.ufIdx) = uFuture;
+            z(dims.yfIdx) = freeY + Tu*uFuture;
     end
 end
 
 function z = projection_baseline(model, data, dims, cfg, jitter)
+    if strcmpi(cfg.task, 'control')
+        Hproj = [data.Hu; data.Hy(1:dims.idx_yp, :)];
+        Hyf = data.Hy(dims.idx_yp+1:end, :);
+        Hyfhat = Hyf*Hproj'*((Hproj*Hproj')\Hproj);
+        Kproj = Hyfhat*pinv(Hproj);
+        knownIdx = [1:dims.idx_up, dims.idx_u + (1:dims.idx_yp)];
+        freeY = Kproj(:, knownIdx)*[data.u_dist(1:dims.idx_up); ...
+            data.y_dist(1:dims.idx_yp)];
+        Tu = Kproj(:, dims.ufIdx);
+        uFuture = solve_regularized_quadratic( ...
+            cfg.control.r*eye(dims.idx_uf) + cfg.control.q*(Tu'*Tu), ...
+            cfg.control.r*data.uref + cfg.control.q*Tu'*(data.yref - freeY), ...
+            jitter);
+        z = data.z_dist;
+        z(dims.ufIdx) = uFuture;
+        z(dims.yfIdx) = freeY + Tu*uFuture;
+        return
+    end
+
     if strcmpi(cfg.task, 'smooth') && model.hasExactG
         H1 = [data.Hu; data.Hy(1:dims.idx_yp, :)];
         Hyf = data.Hy(dims.idx_yp+1:end, :);
@@ -782,7 +1020,7 @@ function [z_est, g_opt, G_opt, info] = hierarchical_bayes_mm(model, dims, cfg, b
                 [G g; g' 1] >= 0;
         cvx_end
 
-        if ~contains(cvx_status, 'Solved') || any(~isfinite(g)) || any(~isfinite(z))
+        if ~cvx_status_is_usable(cvx_status) || any(~isfinite(g)) || any(~isfinite(z))
             info.solved = false;
             info.status = cvx_status;
             info.iter = iter;
@@ -858,7 +1096,7 @@ function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval
     info.obj(iter) = optval;
     info.iter = iter;
     stopNow = false;
-    if ~contains(status, 'Solved') || any(~isfinite(g_value))
+    if ~cvx_status_is_usable(status) || any(~isfinite(g_value))
         info.solved = false;
         info.breakReason = 'solver_failed_or_nonfinite';
         stopNow = true;
@@ -887,7 +1125,7 @@ function [g_new, info, stopNow] = update_mm_info_state(g_value, z_value, ...
     info.iter = iter;
     stopNow = false;
 
-    if ~contains(status, 'Solved') || any(~isfinite(g_value)) || any(~isfinite(z_value))
+    if ~cvx_status_is_usable(status) || any(~isfinite(g_value)) || any(~isfinite(z_value))
         info.solved = false;
         info.breakReason = 'solver_failed_or_nonfinite';
         stopNow = true;
@@ -911,6 +1149,10 @@ function [g_new, info, stopNow] = update_mm_info_state(g_value, z_value, ...
     elseif ~stopNow
         info.breakReason = 'continue';
     end
+end
+
+function tf = cvx_status_is_usable(status)
+    tf = contains(status, 'Solved') || contains(status, 'Inaccurate/Solved');
 end
 
 %% Laplace covariance and gradients
@@ -1075,29 +1317,29 @@ end
 function bases = make_covar_bases(cfg, dims)
     % Basis(:,:,lag+1) contains the Toeplitz mask for one autocorrelation
     % lag, allowing CVX to form S(G) linearly from lifted correlations.
-    bases.u = toeplitz_covar_basis(effective_var(cfg, 'u_data'), dims.idx_u);
-    bases.y = toeplitz_covar_basis(cfg.noise.y_data_var, dims.idx_y);
+    bases.u = hankel_covar_basis(effective_var(cfg, 'u_data'), dims.idx_u, dims.M, cfg);
+    bases.y = hankel_covar_basis(cfg.noise.y_data_var, dims.idx_y, dims.M, cfg);
 end
 
 function S = trajectory_covar(g, dims, cfg)
     % Covariance of the stacked trajectory error induced by noisy Hankel
     % data for a fixed coefficient vector g.
-    Su = covar_data(g, effective_var(cfg, 'u_data'), dims.idx_u);
-    Sy = covar_data(g, cfg.noise.y_data_var, dims.idx_y);
+    Su = covar_data(g, effective_var(cfg, 'u_data'), dims.idx_u, cfg);
+    Sy = covar_data(g, cfg.noise.y_data_var, dims.idx_y, cfg);
     S = blkdiag(Su, Sy);
     S = (S + S')/2;
 end
 
 function S = trajectory_covar_gradient(g, index, dims, cfg)
-    Su = covar_data_gradient(g, index, effective_var(cfg, 'u_data'), dims.idx_u);
-    Sy = covar_data_gradient(g, index, cfg.noise.y_data_var, dims.idx_y);
+    Su = covar_data_gradient(g, index, effective_var(cfg, 'u_data'), dims.idx_u, cfg);
+    Sy = covar_data_gradient(g, index, cfg.noise.y_data_var, dims.idx_y, cfg);
     S = blkdiag(Su, Sy);
     S = (S + S')/2;
 end
 
 function S = trajectory_covar_hessian(ii, jj, dims, cfg)
-    Su = covar_data_hessian(ii, jj, effective_var(cfg, 'u_data'), dims.idx_u);
-    Sy = covar_data_hessian(ii, jj, cfg.noise.y_data_var, dims.idx_y);
+    Su = covar_data_hessian(ii, jj, effective_var(cfg, 'u_data'), dims.idx_u, cfg);
+    Sy = covar_data_hessian(ii, jj, cfg.noise.y_data_var, dims.idx_y, cfg);
     S = blkdiag(Su, Sy);
     S = (S + S')/2;
 end
@@ -1117,19 +1359,25 @@ function S = cvx_toeplitz_covar_from_G(G, basis, covSize)
         return
     end
     S = 0*G(1, 1)*eye(covSize);
-    for lag = 0:covSize-1
-        if lag <= size(G, 1)-1
-            corr = sum(diag(G, lag));
+    for ii = 1:numel(basis.lags)
+        lag = basis.lags(ii);
+        if abs(lag) <= size(G, 1)-1
+            corr = sum(diag(G, abs(lag)));
         else
             corr = 0*G(1, 1);
         end
-        S = S + basis(:, :, lag+1)*corr;
+        S = S + basis.matrices(:, :, ii)*corr;
     end
 end
 
-function sigma_g = covar_data(g, var, cov_size)
+function sigma_g = covar_data(g, var, cov_size, cfg)
     if cov_size == 0 || var == 0
         sigma_g = zeros(cov_size, cov_size);
+        return
+    end
+    rho = noise_correlation(cfg);
+    if rho ~= 0
+        sigma_g = covar_data_correlated(g, rho, var, cov_size);
         return
     end
     gcorr = xcorr(g, cov_size-1);
@@ -1138,9 +1386,14 @@ function sigma_g = covar_data(g, var, cov_size)
     sigma_g = (sigma_g + sigma_g')/2;
 end
 
-function sigma_i = covar_data_gradient(g, index, var, cov_size)
+function sigma_i = covar_data_gradient(g, index, var, cov_size, cfg)
     if cov_size == 0 || var == 0
         sigma_i = zeros(cov_size, cov_size);
+        return
+    end
+    rho = noise_correlation(cfg);
+    if rho ~= 0
+        sigma_i = covar_data_gradient_correlated(g, index, rho, var, cov_size);
         return
     end
     M = length(g);
@@ -1157,9 +1410,14 @@ function sigma_i = covar_data_gradient(g, index, var, cov_size)
     sigma_i = (sigma_i + sigma_i')/2;
 end
 
-function sigma_ij = covar_data_hessian(ii, jj, var, cov_size)
+function sigma_ij = covar_data_hessian(ii, jj, var, cov_size, cfg)
     if cov_size == 0 || var == 0
         sigma_ij = zeros(cov_size, cov_size);
+        return
+    end
+    rho = noise_correlation(cfg);
+    if rho ~= 0
+        sigma_ij = covar_data_hessian_correlated(ii, jj, rho, var, cov_size);
         return
     end
     dcorr = zeros(cov_size, 1);
@@ -1175,15 +1433,82 @@ function sigma_ij = covar_data_hessian(ii, jj, var, cov_size)
     sigma_ij = (sigma_ij + sigma_ij')/2;
 end
 
-function basis = toeplitz_covar_basis(var, cov_size)
+function basis = hankel_covar_basis(var, cov_size, M, cfg)
+    rho = noise_correlation(cfg);
+    if rho == 0
+        basis.matrices = toeplitz_covar_basis(var, cov_size);
+        basis.lags = 0:cov_size-1;
+    else
+        basis.matrices = correlated_covar_basis(rho, var, cov_size, M);
+        basis.lags = -(M-1):(M-1);
+    end
+end
+
+function matrices = toeplitz_covar_basis(var, cov_size)
     idx = (1:cov_size)';
-    basis = zeros(cov_size, cov_size, cov_size);
+    matrices = zeros(cov_size, cov_size, cov_size);
     if var == 0
         return
     end
     for lag = 0:cov_size-1
-        basis(:, :, lag+1) = var*(abs(idx - idx') == lag);
+        matrices(:, :, lag+1) = var*(abs(idx - idx') == lag);
     end
+end
+
+function basis = correlated_covar_basis(rho, var, cov_size, M)
+    basis = zeros(cov_size, cov_size, 2*M-1);
+    if var == 0
+        return
+    end
+    for tau = -(M-1):(M-1)
+        for row = 1:cov_size
+            for col = 1:cov_size
+                basis(row, col, tau+M) = var*rho^abs(tau + row - col);
+            end
+        end
+    end
+end
+
+function sigma_g = covar_data_correlated(g, rho, var, cov_size)
+    M = length(g);
+    gcorr = xcorr(g, M-1);
+    sigma_g = zeros(cov_size, cov_size);
+    varseq = var*rho.^abs(2-M-cov_size:M+cov_size-2);
+    for row = 1:cov_size
+        for col = 1:cov_size
+            sigma_g(row, col) = varseq(row-col+cov_size:row-col+cov_size+2*M-2)*gcorr;
+        end
+    end
+    sigma_g = (sigma_g + sigma_g')/2;
+end
+
+function sigma_i = covar_data_gradient_correlated(g, index, rho, var, cov_size)
+    M = length(g);
+    sigma_i = zeros(cov_size, cov_size);
+    for row = 1:cov_size
+        for col = 1:cov_size
+            offset = row - col;
+            value = 0;
+            for jj = 1:M
+                value = value + g(jj)*var*rho^abs(index - jj + offset);
+                value = value + g(jj)*var*rho^abs(jj - index + offset);
+            end
+            sigma_i(row, col) = value;
+        end
+    end
+    sigma_i = (sigma_i + sigma_i')/2;
+end
+
+function sigma_ij = covar_data_hessian_correlated(ii, jj, rho, var, cov_size)
+    sigma_ij = zeros(cov_size, cov_size);
+    for row = 1:cov_size
+        for col = 1:cov_size
+            offset = row - col;
+            sigma_ij(row, col) = var*rho^abs(ii - jj + offset) ...
+                + var*rho^abs(jj - ii + offset);
+        end
+    end
+    sigma_ij = (sigma_ij + sigma_ij')/2;
 end
 
 %% Result handling
@@ -1429,6 +1754,17 @@ end
 function x = solve_regularized_quadratic(Q, c, jitter)
     Q = make_spd(Q, jitter);
     x = Q\c;
+end
+
+function [freeY, Tu] = output_prediction_matrices(A, B, C, x0, horizon)
+    freeY = zeros(horizon, 1);
+    Tu = zeros(horizon, horizon);
+    for row = 1:horizon
+        freeY(row) = C*(A^(row-1))*x0;
+        for col = 1:row-1
+            Tu(row, col) = C*(A^(row-1-col))*B;
+        end
+    end
 end
 
 function H = GenHankel(X, window)
