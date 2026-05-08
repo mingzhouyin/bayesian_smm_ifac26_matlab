@@ -17,7 +17,7 @@
 %   cfg.noise.inputNoise = true;
 %   cfg.noise.distribution = 'gaussian';
 %   cfg.experiment.seed = 3;
-%   run('bayesSMMUnifiedMMCompare.m')
+%   run('bayesSMMCompare.m')
 %
 % Control-task example:
 %   cfg = struct();
@@ -28,7 +28,7 @@
 %   cfg.noise.correlation = 0.95;
 %   cfg.noise.y_data_var = 1e-2;
 %   cfg.noise.y_var = 1e-2;
-%   run('bayesSMMUnifiedMMCompare.m')
+%   run('bayesSMMCompare.m')
 %
 % Copyright 2026 Leibniz University Hannover, Mingzhou Yin
 
@@ -315,7 +315,7 @@ function cfg = finalize_bayes_smm_mm_compare_config(cfg)
     if ~isfield(cfg.save, 'resultFile') || isempty(cfg.save.resultFile)
         inputTag = bool_tag(cfg.noise.inputNoise, 'inputNoise', 'exactInput');
         cfg.save.resultFile = fullfile(cfg.paths.resultDir, sprintf( ...
-            'bayesSMMUnifiedMMCompare_%s_%s_%s_results.mat', ...
+            'bayesSMMCompare_%s_%s_%s_results.mat', ...
             lower(cfg.task), lower(cfg.noise.distribution), inputTag));
     end
     cfg.resultFile = cfg.save.resultFile;

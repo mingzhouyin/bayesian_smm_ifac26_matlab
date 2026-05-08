@@ -62,9 +62,9 @@ end
 function opts = default_bayes_smm_test_options()
     opts = struct();
     opts.Ne = 100;
-    opts.seedSmooth = 1;
-    opts.seedPredict = 1;
-    opts.seedControl = 1;
+    opts.seedSmooth = 42;
+    opts.seedPredict = 42;
+    opts.seedControl = 42;
     opts.mmMaxIter = 100;
     opts.mmTol = 1e-3;
     opts.mmEta = 1e-4;
