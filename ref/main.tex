@@ -1,0 +1,493 @@
+% ---------------------------------------------------------------------
+%\documentclass[smaller]{beamer}                       %  4:3 Format
+\documentclass[smaller,aspectratio=169]{beamer}        % 16:9 Format
+% ---------------------------------------------------------------------
+
+\usepackage[slides,biblatex,biber,english,rotis]{irtdokumente}
+\usepackage{algorithm}
+\usepackage{algorithmicx}
+\usepackage{algpseudocode}
+\usepackage{setspace}
+\usepackage{dsfont}		% Doublestroke font 
+\addbibresource{bib.bib}
+\ExecuteBibliographyOptions{doi=false,url=false,isbn=false,firstinits=true}
+\newcommand{\norm}[1]{\left\lVert#1\right\rVert}
+\newcommand{\col}[1]{\mathrm{col}\left(#1\right)}
+\newcommand{\cov}[1]{\mathrm{cov}\left(#1\right)}
+\newcommand{\vect}[1]{\mathrm{vec}\left(#1\right)}
+\newcommand{\tr}[1]{\mathrm{tr}\left(#1\right)}
+\newcommand{\pr}[1]{\mathrm{Pr}\left(#1\right)}
+\newcommand{\rank}[1]{\mathrm{rank}\left(#1\right)}
+\newcommand{\diag}[1]{\mathrm{diag}\left(#1\right)}
+\newcommand{\logdet}[1]{\mathrm{logdet}\left(#1\right)}
+\newcommand{\blkdiag}[1]{\mathrm{blkdiag}\left(#1\right)}
+\newcommand{\dett}[1]{\mathrm{det}\left(#1\right)}
+\newcommand{\ellip}[1]{\mathcal{E}_f\left(#1\right)}
+
+\def\app#1#2{%
+  \mathrel{%
+    \setbox0=\hbox{$#1\sim$}%
+    \setbox2=\hbox{%
+      \rlap{\hbox{$#1\propto$}}%
+      \lower1.1\ht0\box0%
+    }%
+    \raise0.25\ht2\box2%
+  }%
+}
+\def\approxprop{\mathpalette\app\relax}
+
+% ---------------------------------------------------------------------
+%  Options ([folie,biblatex,biber,...])
+% ---------------------------------------------------------------------
+%  english:        English slides
+%  navi:           Navigation symbols
+%  noframenumbers: No page numbers
+%  rf:             Robot-Workshop logo as well
+%  rfonly:         Robot-Workshop only
+%  rfall:          Robot-Workshop only but with Roberta
+%  l3s:            L3S logo as well
+%  l3sonly:        L3S logo only
+%  fei:            Department logo as well
+%  rotis:          LUH-font (math font sans serif)
+%  sansmf:         Default font, but math font sans serif
+%  cmss:           Use cmss (compacter) instead of cmbr for sans serif
+% ---------------------------------------------------------------------
+
+% ---------------------------------------------------------------------
+%  For optimal fonts using the default font the pakcage
+%  cm-super must be installed
+% ---------------------------------------------------------------------
+
+% ---------------------------------------------------------------------
+% ---------------------------------------------------------------------
+%  ADAPT HERE: Inforamtion on Author, Title, Date ...
+% ---------------------------------------------------------------------
+% ---------------------------------------------------------------------
+
+\author[M Yin]{Mingzhou Yin}
+\title{On a Unified Bayesian Data-Driven Framework}
+\date{\today}
+\occasion{}	% like, e.g., IFAC World Congress
+\funding{}	% currently available: dfg, erc-stg
+
+% Optional information (uncomment lines beginning with %%% and adapt if desired)
+
+% Other institute
+%%%\institute{Institute and/or Logo}
+% Default is (depending on other options) the IRT logo as shown below
+% \institute{\includegraphics[width=5cm]{\irtlogo}}
+
+% Different Affiliations
+
+%%%\author[Author1, Author2]{Long Author1 \inst{1}, 
+%%%                          Long Author2 \inst{2},
+%%%                          Long Author3 \inst{1}}
+%%%\institute{\inst{1} Institute of Automatic Control \\
+%%%           \inst{2} Institute for Systems Theory and Automatic Control
+%%%           \par\vspace{4mm}  % Additional Logo?
+%%%           \includegraphics[width=4cm]{\irtlogo}\\[2ex]
+%%%}
+
+% A title graphics to the right of the title
+%%%\titlegraphic{\includegraphics[width=0.9\textwidth]{example-image-c}}
+
+% ---------------------------------------------------------------------
+% ---------------------------------------------------------------------
+
+% ---------------------------------------------------------------------
+%  Beginn der Folien
+% ---------------------------------------------------------------------
+\begin{document}
+
+\maketitle
+
+\begin{frame}[fragile]{The trajectory estimation problem}
+\begin{itemize}
+    \item LTI system with input disturbance and output noise:
+    \[y_t^0=Gu_t^0,\quad
+    \underbrace{\begin{bmatrix}
+        u_t\\y_t
+    \end{bmatrix}}_{z_t}=
+    \underbrace{\begin{bmatrix}
+        u_t^0\\y_t^0
+    \end{bmatrix}}_{z_t^0}+
+    \underbrace{\begin{bmatrix}
+        w_t\\v_t
+    \end{bmatrix}}_{\nu_t}
+    \]
+    
+    \vspace{-1em}
+    
+    \item Instead of model $G$, the system is characterized by offline data:
+    \[\text{length-L signal: }\mathbf{z}^d_i := \begin{bmatrix}
+        z^d_{t_i+1}\\z^d_{t_i+2}\\z^d_{t_i+L}
+    \end{bmatrix},\quad\text{signal matrix: }H:= \begin{bmatrix}\mathbf{z}^d_1&\mathbf{z}^d_2&\cdots&\mathbf{z}^d_M\end{bmatrix}=H^0+\Delta_H\]
+    \item Hankel construction: $t_{i+1}=t_i+1$, Page construction: $t_{i+1}=t_i+L$
+    \pause
+    \item Consider the problem of estimating length-$L$ trajectory $\mathbf{z}^0 := \col{z_1^0,z_2^0\dots,z_L^0}$ from (partial) linear observation $\boldsymbol{\zeta}$ and signal matrix $H$:
+    \[\boldsymbol{\zeta} = \Phi\mathbf{z}^0 + \boldsymbol{\epsilon},\quad \mathbf{z}^0=H^0\mathbf{g}=H\mathbf{g}-\Delta_H\mathbf{g}\]
+    
+    \vspace{-0.5em}
+    
+    \begin{itemize}
+        \item Correctness guaranteed by $\rank{H^0}=\rank{\Phi H^0}=n_uL+n_x$.
+    \end{itemize}
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Examples}
+\begin{itemize}
+    \item \textbf{Smoothing:} the whole trajectory is known:
+    \[\Phi=\mathbb{I}_{nL},\quad\boldsymbol{\zeta}=\col{z_1,z_2,\dots,z_L},\quad\boldsymbol{\epsilon}=\col{\nu_1,\nu_2,\dots,\nu_L}\]
+    \item \textbf{Prediction:} all inputs and first $L_0$ outputs are known ($L=L_0+L'$):
+    \begin{align*}
+    \Phi=\blkdiag{\mathbb{I}_{nL_0},\mathbb{I}_{L'}\otimes\begin{bmatrix}
+    \mathbb{I}_{n_u}&\mathbf{0}_{n_u\times n_y}
+\end{bmatrix}},\quad
+    \boldsymbol{\zeta}&=\col{z_1  ,\dots,z_{L_0},u_{L_0+1},\dots,u_L},\\
+    \boldsymbol{\epsilon}&=\textrm{col}\,(\nu_1,\dots,\nu_{L_0},w_{L_0+1},\newline\dots,w_L)
+\end{align*}
+    \item \textbf{Control:} first $L_0$ inputs and outputs are known, last $L'$ inputs and outputs are subject to quadratic control objective $\sum_{t=L_0+1}^L\left(\norm{u_t^0-u_t^\mathrm{ref}}_R^2+\norm{y_t^0-y_t^\mathrm{ref}}_Q^2\right)$:
+    \begin{align*}
+    \Phi=\mathbb{I}_{nL},\quad\boldsymbol{\zeta}=\col{z_1,\dots,z_{L_0}  ,\zeta_{L_0+1}^\mathrm{ctr},\dots,\zeta_L^\mathrm{ctr}},\quad\boldsymbol{\epsilon}=\col{\nu_1,\dots,\nu_{L_0},\boldsymbol{\epsilon}^\mathrm{ctr}},
+    \end{align*}
+    where $\zeta_t^\mathrm{ctr}=\col{u_t^\mathrm{ref},y_t^\mathrm{ref}}$, $\boldsymbol{\epsilon}^\mathrm{ctr}$: tracking error.
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Elliptical distributions}
+\begin{itemize}
+    \item Consider elliptical (elliptically contoured) distribution $\ellip{\mu,\Sigma}$ with pdf:
+    \[p(x;\mu,\Sigma)=\dett\Sigma^{-\frac{1}{2}}f\left(\norm{x-\mu}_{\Sigma^{-1}}^2\right),\quad f(\cdot)\in[0,+\infty)\to[0,+\infty),\lim_{x\to +\infty}f(x)=0\]
+
+    \vspace{-0.5em}
+    
+    \begin{itemize}
+        \item $\ellip{\mu,\Sigma)}$ is unimodal is $f(\cdot)$ is non-increasing.
+        \item Gaussian: $f(x)\propto\exp\left(-\frac{1}{2}x\right)$, Student's $t$: $f(x)\propto\left(1+x/\xi\right)^{-(\xi+m)/2}$
+    \end{itemize}
+
+    \vspace{0.5em}
+
+    \item Gaussian-like properties:
+    \[x\sim\ellip{\mu,\Sigma}\rightarrow \mathbb{E}(x)=\mu,\ \cov{x}=\kappa(f)\Sigma,\ Ax+b\sim\ellip{A\mu+b,A\Sigma A^\top}\]
+    \[
+    \begin{bmatrix}x\\y\end{bmatrix}
+    \sim \ellip{
+    \begin{bmatrix}\boldsymbol{\mu}_x\\\boldsymbol{\mu}_y\end{bmatrix},
+    \begin{bmatrix}
+    \Sigma_{xx} & \Sigma_{xy}\\
+    \Sigma_{xy}^\top & \Sigma_{yy}
+    \end{bmatrix}}\rightarrow
+    x|y\sim\mathcal{E}_{f_y}\left(
+    \mathbf{m}(y),\Omega
+    \right),\ f_y(x)\propto f\left(x+(y-\boldsymbol{\mu}_y)^\top\Sigma_{yy}^{-1}(y-\boldsymbol{\mu}_y)\right)
+    \]
+    \[\mathbf{m}(y)=\boldsymbol{\mu}_x+\Sigma_{xy}\Sigma_{yy}^{-1}\left(y-\boldsymbol{\mu}_y\right),\quad\Omega=\Sigma_{xx}-\Sigma_{xy}\Sigma_{yy}^{-1}\Sigma_{xy}^\top\]
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Uncertainty specification}
+    \begin{itemize}
+        \item Consider zero-mean, stationary, elliptical input disturbance \& output noise:
+        \begin{align*}
+            \begin{bmatrix}
+                \nu_t^d\\
+                \nu_{t+\tau}^d\\
+            \end{bmatrix}
+            \sim\ellip{\mathbf{0},
+            \begin{bmatrix}
+                \Sigma_\nu^d(0)&\Sigma_\nu^d(\tau)\\
+                \Sigma_\nu^d(\tau)&\Sigma_\nu^d(0)
+            \end{bmatrix}
+            },\quad
+            \begin{bmatrix}
+                \nu_t\\
+                \nu_{t+\tau}\\
+            \end{bmatrix}
+            \sim\ellip{\mathbf{0},
+            \begin{bmatrix}
+                \Sigma_\nu(0)&\Sigma_\nu(\tau)\\
+                \Sigma_\nu(\tau)&\Sigma_\nu(0)
+            \end{bmatrix}
+            }
+        \end{align*}
+        \item Uncertainty from reference tracking encoded by $\Sigma^\mathrm{ctr}=\blkdiag{R^{-1},Q^{-1}}$
+    \item Characterize uncertainties in both online observations \& offline data:
+
+    \vspace{-0.7em}
+    
+    \[\boldsymbol{\zeta} = \Phi\mathbf{z}^0 + \alert{\boldsymbol{\epsilon}},\quad \mathbf{z}^0=H^0\mathbf{g}=H\mathbf{g}-\alert{\Delta_H\mathbf{g}}\]
+    
+    \begin{itemize}
+        \item Offline data:        $\Delta_H\mathbf{g}|\mathbf{g}\sim\ellip{\mathbf{0}_{nL},\Sigma_g(\mathbf{g})}$
+
+        \vspace{-0.5em}
+
+        \[\left(\Sigma_g(\mathbf{g})\right)_{i,j}=\sum_{k=1}^M\sum_{m=1}^M g_{k}g_{m}\Sigma_\nu^d(|t_k+i-(t_m+j)|)\]
+        
+        %\[\left(\Sigma_g(\mathbf{g})\right)_{i,j}=\sum_{\tau=1-M}^{M-%1}\Sigma_\nu^d(|\tau l+i-j|)K(\tau),\quad K(\tau):=\sum_{k=1}^{M-|\tau|}g_k %g_{k+|\tau|},\quad l=\begin{cases}
+        %    1,&\text{Hankel}\\
+        %    L,&\text{Page}
+        %\end{cases}\]
+        
+        \item Online observations: $\boldsymbol{\epsilon}\sim\ellip{\mathbf{0}_p,\Sigma_\epsilon}$. Let $(\Sigma_z)_{i,j}=\Sigma_\nu(|i-j|)$, $\Gamma=\begin{bmatrix}
+            \mathbf{0}&\mathbb{I}
+        \end{bmatrix}$.
+
+        \vspace{-0.3em}
+        
+        \[\text{Smoothing: }\Sigma_\epsilon=\Sigma_z,\quad\text{Prediction: }\Sigma_\epsilon=\Phi\Sigma_z\Phi^\top,\quad\text{Control: }\Sigma_\epsilon=\Sigma_z+\Gamma^\top\left(\mathbb{I}_{L'}\otimes\Sigma^\mathrm{ctr}\right)\Gamma\]
+        
+    \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Empirical Bayes approach}
+    \begin{itemize}
+        \item Now we have the following Bayesian model:
+        \[\boldsymbol{\zeta}|\mathbf{z}^0\sim\ellip{\Phi\mathbf{z}^0,\Sigma_\epsilon},\quad \mathbf{z}^0|\mathbf{g}\sim\ellip{H\mathbf{g},\Sigma_g(\mathbf{g})}\]
+        \item The empirical Bayes approach is commonly used, i.e., 1) estimate $\mathbf{g}$ by maximum marginal likelihood as hyperparameters, 2) find MAP estimate / posterior mean conditioned on estimated $\hat{\mathbf{g}}$.
+        \item MML step: $\boldsymbol{\zeta} = \Phi H\mathbf{g} - \Phi\Delta_H\mathbf{g} + \boldsymbol{\epsilon}\rightarrow\boldsymbol{\zeta}|\mathbf{g}\sim\ellip{\Phi H\mathbf{g},\Phi\Sigma_g(\mathbf{g})\Phi^\top+\Sigma_\epsilon}$
+        \[\hat{\mathbf{g}}=\mathrm{arg}\underset{\mathbf{g}}{\mathrm{max}}\ p\left(\boldsymbol{\zeta}|\mathbf{g}\right)=\mathrm{arg}\underset{\mathbf{g}}{\mathrm{max}}\ \dett{\Psi(\mathbf{g})}^{-\frac{1}{2}}f\left(\norm{\boldsymbol{\zeta}-\Phi H\mathbf{g}}_{\Psi^{-1}(\mathbf{g})}^2\right),\ \Psi(\mathbf{g}):=\Phi\Sigma_g(\mathbf{g})\Phi^\top+\Sigma_\epsilon\]
+        \item MAP step: $p\left(\mathbf{z}^0|\boldsymbol{\zeta},\hat{\mathbf{g}}\right)\propto p\left(\boldsymbol{\zeta}|\mathbf{z}^0\right)p\left(\mathbf{z}^0|\hat{\mathbf{g}}\right)$
+        \[\hat{\mathbf{z}}=\mathrm{arg}\underset{\mathbf{z}^0}{\mathrm{max}}\ p\left(\boldsymbol{\zeta}|\mathbf{z}^0\right)p\left(\mathbf{z}^0|\hat{\mathbf{g}}\right)=\mathrm{arg}\underset{\mathbf{z}^0}{\mathrm{max}}\ f\left(\norm{\boldsymbol{\zeta}-\Phi\mathbf{z}^0}_{\Sigma_\epsilon^{-1}}^2\right)f\left(\norm{\mathbf{z}^0-H\hat{\mathbf{g}}}_{\Sigma_g^{-1}(\hat{\mathbf{g}})}^2\right)\]
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Solving optimization problems}
+    \begin{itemize}
+        \item MAP estimate coincides with posterior mean if $\ellip{\cdot,\cdot}$ is unimodal:
+        \[\left.\begin{bmatrix}
+            \mathbf{z}^0\\\boldsymbol{\zeta}
+        \end{bmatrix}\right|\hat{\mathbf{g}}\sim\ellip{\begin{bmatrix}
+            H\hat{\mathbf{g}}\\\Phi H\hat{\mathbf{g}}
+        \end{bmatrix},\begin{bmatrix}
+            \Sigma_g(\hat{\mathbf{g}})&\Sigma_g(\hat{\mathbf{g}})\Phi^\top\\
+            \Phi\Sigma_g(\hat{\mathbf{g}})&\Psi(\hat{\mathbf{g}})
+        \end{bmatrix}},\quad\mathbf{z}^0|\boldsymbol{\zeta},\hat{\mathbf{g}}\sim\mathcal{E}_{f_\zeta}\left(\hat{\mathbf{z}},\Omega\right)\]
+        \[\Omega=\Sigma_g-\Sigma_g\Phi^\top\Psi^{-1}\Phi\Sigma_g,\quad\hat{\mathbf{z}}=H\hat{\mathbf{g}}+\Sigma_g\Phi^\top\Psi^{-1}\left(\boldsymbol{\zeta}-\Phi H\hat{\mathbf{g}}\right)=\Omega\left(\Phi^\top\Sigma_\epsilon^{-1}\boldsymbol{\zeta}+\Sigma_g^{-1}H\hat{\mathbf{g}}\right)\]
+
+        \vspace{0.5em}
+        \pause
+        \item For MML, previously an SQP algorithm developed for Gaussian \& block-diagonal $\Sigma_g$
+        \item \alert{Towards a general algorithm:} semidefinite relaxation + majorize-minimization algorithm
+        \[\hat{\mathbf{g}}=\mathrm{arg}\underset{\mathbf{g}}{\mathrm{min}}\ \frac12\underbrace{\log\dett{\Psi(\mathbf{g})}}_{\text{concave}\,\circ\,\text{quadratic}}+\rho\big(\underbrace{\norm{\boldsymbol{\zeta}-\Phi H\mathbf{g}}_{\Psi^{-1}(\mathbf{g})}^2}_{\text{convex}\,\circ\,\text{quadratic}}\big),\quad \rho(\cdot)=-\log f(\cdot)\]
+
+    \vspace{-0.5em}
+    \begin{itemize}
+        \item Gaussian: $\rho(x)=\frac12 x$
+        \item Heavy-tailed: $\rho(x)$ concave $\rightarrow$ majorize
+        \item Light-tailed: $\rho(x)$ convex (and non-decreasing) $\rightarrow$ convex composite
+    \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Solving optimization problems}
+    \[G=\mathbf{g}\mathbf{g}^\top,\ \mathcal{A}(G)=\Psi(\mathbf{g})=\Phi\left(\sum_{k=1}^M\sum_{m=1}^M (G)_{k,m}B_{km}\right)\Phi^\top+\Sigma_\epsilon,\ (B_{km})_{i,j}=\Sigma_\nu^d(|t_k+i-(t_m+j)|)\]
+    \begin{itemize}
+        \item Semidefinite relaxation:
+        \begin{align*}
+        (\hat{\mathbf{g}},\hat{G})=\mathrm{arg}\underset{\mathbf{g},G}{\mathrm{min}}\ \frac12\log\dett{\mathcal{A}(G)}+\rho\left(\norm{\boldsymbol{\zeta}-\Phi H\mathbf{g}}_{\mathcal{A}^{-1}(G)}^2\right)+\eta(\tr{G}-\norm{\mathbf{g}}_2^2)\quad        \text{s.t.}\ \begin{bmatrix}
+            G&\mathbf{g}\\
+            \mathbf{g}^\top&1
+        \end{bmatrix}\succeq 0
+        \end{align*}
+        \item Majorize-minimization algorithm:
+        \begin{align*}
+            (\hat{\mathbf{g}}^{i+1},\hat{G}^{i+1})=\mathrm{arg}\underset{\mathbf{g},G}{\mathrm{min}}
+            &\ \ 
+            \frac12\tr{\mathcal{A}^{-1}(G^i)\mathcal{A}(G)}
+            +\bar{\rho}(t)+
+            \eta\,\tr{G}-
+            2\eta(\mathbf g^i)^\top\mathbf g\\
+            \text{s.t.}
+            &\ 
+            \begin{bmatrix}
+            \mathcal{A}(G) & \boldsymbol\zeta-\Phi H\mathbf g\\
+            (\boldsymbol\zeta-\Phi H\mathbf g)^\top & t
+            \end{bmatrix}
+            \succeq 0,\quad
+            \begin{bmatrix}
+            G & \mathbf g\\
+            \mathbf g^\top & 1
+            \end{bmatrix}
+            \succeq 0
+        \end{align*}
+        \begin{itemize}
+            \item Gaussian and convex $\rho(\cdot)$: $\bar\rho(\cdot)=\rho(\cdot)$
+            \item Concave $\rho(\cdot)$: $\bar\rho(t)=w^it$, $w^i=\rho'\left(\norm{\boldsymbol{\zeta}-\Phi H\mathbf{g}^i}_{\mathcal{A}^{-1}(G^i)}^2\right)$
+        \end{itemize}
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Error quantification}
+\begin{refsection}
+    \begin{itemize}
+        \setlength\itemsep{0.5em}
+        \item The posterior quantifies the trajectory estimation error by $\Omega$
+        \item $\dots$ but conditioned on $\hat{\mathbf{g}}$, i.e., it underestimates the error by ignoring the error in $\hat{\mathbf{g}}$
+        \item Within the empirical Bayes framework, high-probability bounds developed in \cite{10155287} by
+        \begin{enumerate}
+            \item calculating a high-probability region of $\mathbf{g}$ instead of a point MML estimate $\hat{\mathbf{g}}$
+            \item using the worst-case $\Omega$ in the region
+        \end{enumerate}
+        \item $\dots$ not applicable here since
+        \begin{enumerate}
+            \item high-dimensional integration needed for $\mathbf{g}$
+            \item full posterior distribution needed for receding horizon filtering
+        \end{enumerate}
+        \item \alert{Solution:} consider an alternative framework with error quantification on $\mathbf{g}$
+    \end{itemize}
+
+\vspace{2em}
+\AtNextBibliography{\scriptsize}
+\printbibliography
+\end{refsection}
+\end{frame}
+
+\begin{frame}{Hierarchical Bayesian approach}
+    \begin{itemize}
+        \item Estimate both $\mathbf{z}^0$ and $\mathbf{g}$ in a joint MAP problem
+        \item This approach requires a prior on $\mathbf{g}$. Following the common 2-norm regularization on $\mathbf{g}$, we can choose a simple diagonal scale parameter
+        \[\boldsymbol{\zeta}|\mathbf{z}^0\sim\ellip{\Phi\mathbf{z}^0,\Sigma_\epsilon},\quad \mathbf{z}^0|\mathbf{g}\sim\ellip{H\mathbf{g},\Sigma_g(\mathbf{g})},\quad\mathbf{g}\sim\ellip{\mathbf{0},\lambda\mathbb{I}}\]
+        \item Joint MAP estimate: $
+        p(\mathbf{z}^0,\mathbf{g}|\boldsymbol{\zeta})
+        \propto
+        p(\boldsymbol{\zeta}|\mathbf{z}^0)
+        p(\mathbf{z}^0|\mathbf{g})
+        p(\mathbf{g})$
+        \begin{align*}
+        (\hat{\mathbf{z}},\hat{\mathbf{g}})&=
+        \mathrm{arg}\underset{\mathbf{z}^0,\mathbf{g}}{\mathrm{max}}\ 
+        p(\boldsymbol{\zeta}|\mathbf{z}^0)
+        p(\mathbf{z}^0|\mathbf{g})
+        p(\mathbf{g})\\
+        &=
+        \mathrm{arg}\underset{\mathbf{z}^0,\mathbf{g}}{\mathrm{max}}\ \dett{\Sigma_g(\mathbf{g})}^{-\frac{1}{2}}f\left(\norm{\boldsymbol{\zeta}-\Phi\mathbf{z}^0}_{\Sigma_\epsilon^{-1}}^2\right)f\left(\norm{\mathbf{z}^0-H\mathbf{g}}_{\Sigma_g^{-1}(\mathbf{g})}^2\right)f\left(\lambda^{-1}\norm{g}_2^2\right)
+        \end{align*}
+        \item Semidefinite relaxation + majorize-minimization algorithm: $\mathcal{B}(G)=\Sigma_g(\mathbf{g})=\sum_{k=1}^M\sum_{m=1}^M (G)_{k,m}B_{km}$
+        \begin{equation*}
+            \resizebox{0.95\hsize}{!}{$
+            \begin{aligned}
+                (\hat{\mathbf{z}}^{i+1},\hat{\mathbf{g}}^{i+1},\hat{G}^{i+1})=\mathrm{arg}\underset{\mathbf{z}^0,\mathbf{g},G}{\mathrm{min}}
+            &\ \ 
+            \tr{\mathcal{B}^{-1}(G^i)\mathcal{B}(G)}
+            +\norm{\boldsymbol{\zeta}-\Phi\mathbf{z}^0}_{\Sigma_\epsilon^{-1}}^2+t+\lambda^{-1}\norm{g}_2^2+
+            \eta\,\tr{G}-
+            2\eta(\mathbf g^i)^\top\mathbf g\\
+            \text{s.t.}
+            &\ 
+            \begin{bmatrix}
+            \mathcal{B}(G) & \mathbf z^0-H\mathbf g\\
+            (\mathbf z^0-H\mathbf g)^\top & t
+            \end{bmatrix}
+            \succeq 0,\quad
+            \begin{bmatrix}
+            G & \mathbf g\\
+            \mathbf g^\top & 1
+            \end{bmatrix}
+            \succeq 0
+            \end{aligned}$
+            }
+        \end{equation*}
+    \end{itemize}
+\end{frame}
+\begin{frame}{Posterior approximation}
+    \begin{itemize}
+        \item The posterior distribution is no longer elliptical, since $(\mathbf{z}^0,\mathbf{g},\boldsymbol{\zeta})$ cannot be jointly elliptical.
+        \begin{itemize}
+            \item To see this, note that in the conditional distribution equation, $\Omega$ does not depend on $y$.
+        \end{itemize}
+        \item To obtain usable posterior statistics, common approaches include MCMC \& Laplace approximation.
+        \item We do Laplace approximation here since we have $\hat{\mathbf{z}}$ and $\hat{\mathbf{g}}$ already.
+    \end{itemize}
+
+    \vspace{1em}
+    \alert{Laplace approximation}
+    \begin{itemize}
+        \item Consider a MAP problem $\hat{\boldsymbol{\theta}}=\mathrm{arg}\mathrm{min}_{\boldsymbol{\theta}}\ J(\boldsymbol{\theta})$, $J(\boldsymbol{\theta})=-\log p(\boldsymbol{\theta}|\boldsymbol{\zeta})+\text{const}$
+        \item Quadratic approximation around $\hat{\boldsymbol{\theta}}$: $J(\boldsymbol{\theta})\approx J(\hat{\boldsymbol{\theta}})+\frac 12\norm{\boldsymbol{\theta}-\hat{\boldsymbol{\theta}}}_H^2$, $H=\nabla_{\boldsymbol{\theta}}^2J(\boldsymbol{\theta})\big|_{\boldsymbol{\theta}=\hat{\boldsymbol{\theta}}}$
+        \item This leads to posterior approximation: $p(\boldsymbol{\theta}|\boldsymbol{\zeta})\approxprop\exp\left(-\frac 12\norm{\boldsymbol{\theta}-\hat{\boldsymbol{\theta}}}_H^2\right)$, i.e., $\boldsymbol{\theta}|\boldsymbol{\zeta}\overset{\text{approx}}{\sim}\mathcal{N}(\hat{\boldsymbol{\theta}},H^{-1})$
+        \item \alert{Extension to elliptical distribution:} matching the Hessian of $\boldsymbol{\theta}|\boldsymbol{\zeta}\overset{\text{approx}}{\sim}\ellip{\hat{\boldsymbol{\theta}},\hat{\Sigma}_\theta}$ with the true Hessian $H$ at $\boldsymbol{\theta}=\hat{\boldsymbol{\theta}}$, we have $\hat{\Sigma}_\theta=2\rho'(0)H^{-1}$, $\rho(\cdot)=-\log f(\cdot)$.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Posterior approximation}
+    \begin{itemize}
+        \setlength\itemsep{1em}
+        \item For our case, we have
+        \[\boldsymbol{\theta}=\begin{bmatrix}
+            \mathbf{z}^0\\\mathbf{g}
+        \end{bmatrix},\  J(\boldsymbol{\theta})=\frac12\log\dett{\Sigma_g(\mathbf{g})}+\rho\left(\norm{\boldsymbol{\zeta}-\Phi\mathbf{z}^0}_{\Sigma_\epsilon^{-1}}^2\right)+\rho\left(\norm{\mathbf{z}^0-H\mathbf{g}}_{\Sigma_g^{-1}(\mathbf{g})}^2\right)+\rho\left(\lambda^{-1}\norm{g}_2^2\right)\]
+        \item Let $H=\begin{bmatrix}
+            H_{zz}&H_{zg}\\
+            H_{zg}^\top&H_{gg}
+        \end{bmatrix}$, we have $\mathbf{z}^0|\boldsymbol{\zeta}\overset{\text{approx}}{\sim}\ellip{\hat{\mathbf{z}},\hat{\Sigma}_z}$, $\hat{\Sigma}_z=2\rho'(0)\left(H_{zz}-H_{zg}H_{gg}^{-1}H_{zg}^\top\right)^{-1}$.
+        \item Note that for the Gaussian case, $H_{zz}=\Phi^\top\Sigma_\epsilon^{-1}\Phi+\Sigma_g^{-1}(\mathbf{g})$. Recall that in empirical Bayes, we have $\Omega=H_{zz}^{-1}$.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Numerical simulation}
+\begin{columns}
+    \column{0.475\textwidth}
+    \alert{Smoothing:}
+    \begin{itemize}
+        \item No input disturbance, uncorrelated measurement noise with Student’s t-distributions: $\text{DOF}=10$, $\Sigma_v^d(0)=10^{-4}$, $\Sigma_v(0)=10^{-2}$
+    \end{itemize}
+
+    \begin{table}[ht]
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{cccc}
+    \hline\hline
+     & Median error & Comp. time & Coverage 90\% \\\hline
+    EB-fmincon & 0.074 & 0.29\,s & 66\% \\
+    EB-SQP & 0.049 & 0.09\,s & - \\
+    N4SID & 0.071 & 0.05\,s & - \\
+    Proj & 0.054 & 0.0004\,s & - \\
+    EB-MM & 0.067 & 18.65\,s & 52\% \\
+    HB-MM & 0.031 & 35.21\,s & 98\% \\\hline\hline
+    \end{tabular}}
+    \caption{Data-driven smoothing result comparison}
+    \end{table}
+    \column{0.475\textwidth}
+    \alert{Prediction:}
+    \begin{itemize}
+        \item Uncorrelated Gaussian input disturbance \& measurement noise: $\Sigma_w^d(0)=\Sigma_v^d(0)=10^{-4}$, $\Sigma_w(0)=\Sigma_v(0)=10^{-2}$
+    \end{itemize}
+
+    \begin{table}[ht]
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{cccc}
+    \hline\hline
+     & Median error & Comp. time & Coverage 90\% \\\hline
+    EB-fmincon & 0.103 & 0.83\,s & 0\% \\
+    EB-SQP & 0.103 & 0.0005\,s & - \\
+    N4SID & 0.099 & 0.05\,s & - \\
+    Proj & 0.133 & 0.0001\,s & - \\
+    EB-MM & 0.103 & 5.76\,s & 0\% \\
+    HB-MM & 0.105 & 49.74\,s & 81\% \\\hline\hline
+    \end{tabular}}
+    \caption{Data-driven prediction result comparison}
+    \end{table}
+\end{columns}
+\end{frame}
+
+\begin{frame}{Next steps}
+    \begin{itemize}
+        \item \alert{Receding horizon implementation:} Using shifted $\hat{\mathbf{z}},\hat{\Sigma}_z$ at time $t$ to initialize the problem at time $(t+1)$.
+        \begin{itemize}
+            \item In prediction \& control, an additional filtering is needed to optimally combine the most recent output measurement with the previous estimation result.
+        \end{itemize}
+        
+        \vspace{1em}
+        \item \alert{Exploration in control:} In the control task, following the concept of Bayesian optimization, instead of implementing the posterior mean input from $\hat{\mathbf{z}}$, we can search for the best possible trajectory within a $\beta\hat{\Sigma}_z$ confidence region and explore there.
+        \begin{align*}
+            \hat{\mathbf{z}}_\text{explore}=\mathrm{arg}\underset{\mathbf{z}}{\mathrm{min}}&\ \sum_{t=L_0+1}^L\left(\norm{u_t-u_t^\mathrm{ref}}_R^2+\norm{y_t-y_t^\mathrm{ref}}_Q^2\right)\\
+            \text{s.t.}&\ \norm{\mathbf{z}-\hat{\mathbf{z}}}_{\hat{\Sigma}_z^{-1}}^2\leq\beta
+        \end{align*}
+    \end{itemize}
+\end{frame}
+
+\end{document}
+

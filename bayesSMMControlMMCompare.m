@@ -21,7 +21,7 @@ options = optimoptions('fmincon', 'Algorithm', 'interior-point', ...
     'StepTolerance', 1e-14, 'MaxFunctionEvaluations', 1e5, ...
     'MaxIterations', 1e4, 'Display', 'off');
 
-Ne = 1;
+Ne = 10;
 methodNames = {'EB-fmincon', 'Convex', 'N4SID', 'Proj', ...
     'EmpBayes-MM', 'HierBayes-MM'};
 numMethods = numel(methodNames);
@@ -33,6 +33,8 @@ ebMMFinalRelStep = nan(Ne, 1);
 hbMMIter = nan(Ne, 1);
 hbMMHitMaxIter = false(Ne, 1);
 hbMMFinalRelStep = nan(Ne, 1);
+hbMMSolved = false(Ne, 1);
+hbMMConverged = false(Ne, 1);
 hbRankGap = nan(Ne, 1);
 hbLaplaceCovTheta = cell(Ne, 1);
 hbLaplaceCovZ = cell(Ne, 1);
@@ -255,7 +257,11 @@ for ii = 1:Ne
     hbMMIter(ii) = hbInfo.iter;
     hbMMHitMaxIter(ii) = hbInfo.hitMaxIter;
     hbMMFinalRelStep(ii) = hbInfo.finalRelStep;
+    hbMMSolved(ii) = hbInfo.solved;
+    hbMMConverged(ii) = hbInfo.converged;
     hbRankGap(ii) = trace(G_hat6) - sum(g_hat6.^2);
+    errory(ii, 6) = r*sum((u_ctr6 - uref).^2) + q*sum((y_ctr6 - yref).^2);
+    t_calc(ii, 6) = toc;
 
     refineTic = tic;
     [z_lap6, g_lap6, refineInfo] = refine_control_joint_map(g_hat6, ...
@@ -271,8 +277,6 @@ for ii = 1:Ne
     [hbOriginalGradNorm(ii), hbOriginalGradInfNorm(ii)] = ...
         original_map_gradient_norm_control(z_lap6, g_lap6, [y_dist; yref], ...
         Hy, Hup, Huf, uref, lambda_g, sigma_y_m, r, k, var, idx_y, mm.jitter);
-    errory(ii, 6) = r*sum((u_ctr6 - uref).^2) + q*sum((y_ctr6 - yref).^2);
-    t_calc(ii, 6) = toc;
 
     tic
     [hbLaplaceCovZ{ii}, hbLaplaceCovTheta{ii}, laplaceInfo] = ...
@@ -323,6 +327,8 @@ fprintf('EB-MM mean iterations: %.2f, hit maxIter: %d/%d, median final rel step:
     mean(ebMMIter), sum(ebMMHitMaxIter), Ne, median(ebMMFinalRelStep, 'omitnan'));
 fprintf('HB-MM mean iterations: %.2f, hit maxIter: %d/%d, median final rel step: %.4g\n', ...
     mean(hbMMIter), sum(hbMMHitMaxIter), Ne, median(hbMMFinalRelStep, 'omitnan'));
+fprintf('HB-MM solved/converged: %d/%d solved, %d/%d converged\n', ...
+    sum(hbMMSolved), Ne, sum(hbMMConverged), Ne);
 fprintf('HB-MM mean rank gap trace(G)-||g||^2: %.4g\n', mean(hbRankGap));
 fprintf('HB-MM median rank gap trace(G)-||g||^2: %.4g\n', median(hbRankGap));
 fprintf('HB original MAP refine success: %d/%d, median iterations: %.4g, median first-order opt: %.4g\n', ...
@@ -449,6 +455,7 @@ function [z_opt, g_opt, G_opt, info] = hierarchical_bayes_mm_control(zetay, Hy, 
     info.rankGap = nan(mm.maxIter, 1);
 
     for iter = 1:mm.maxIter
+        z_prev = z_opt;
         B_prev = make_spd(covar_data(g_prev, k, var, idx_y), mm.jitter);
 
         cvx_begin quiet sdp
@@ -488,14 +495,17 @@ function [z_opt, g_opt, G_opt, info] = hierarchical_bayes_mm_control(zetay, Hy, 
             info.solved = false;
             info.status = cvx_status;
             info.iter = iter;
+            info.breakReason = 'solver_failed_or_nonfinite';
             break
         end
 
         g_new = full(g);
-        z_opt = full(z);
+        z_new = full(z);
+        z_opt = z_new;
         G_opt = full(G);
         info.rankGap(iter) = trace(G_opt) - sum(g_new.^2);
-        [g_prev, info, stopNow] = update_mm_info(g_new, g_prev, cvx_status, cvx_optval, iter, mm, info);
+        [g_prev, info, stopNow] = update_mm_info_state(g_new, z_new, ...
+            g_prev, z_prev, cvx_status, cvx_optval, iter, mm, info);
         if stopNow
             break
         end
@@ -513,6 +523,7 @@ function info = init_mm_info(mm)
     info.finalRelStep = nan;
     info.converged = false;
     info.hitMaxIter = false;
+    info.breakReason = 'not_started';
 end
 
 function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval, iter, mm, info)
@@ -523,6 +534,7 @@ function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval
 
     if ~contains(status, 'Solved') || any(~isfinite(g_value))
         info.solved = false;
+        info.breakReason = 'solver_failed_or_nonfinite';
         stopNow = true;
         g_new = g_prev;
         return
@@ -532,9 +544,48 @@ function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval
     info.finalRelStep = norm(g_new - g_prev)/max(1, norm(g_prev));
     if info.finalRelStep < mm.tol
         info.converged = true;
+        info.breakReason = 'step_tolerance';
         stopNow = true;
     end
     info.hitMaxIter = info.solved && iter == mm.maxIter && ~info.converged;
+    if info.hitMaxIter
+        info.breakReason = 'max_iter';
+    elseif ~stopNow
+        info.breakReason = 'continue';
+    end
+end
+
+function [g_new, info, stopNow] = update_mm_info_state(g_value, z_value, ...
+        g_prev, z_prev, status, optval, iter, mm, info)
+    info.status = status;
+    info.obj(iter) = optval;
+    info.iter = iter;
+    stopNow = false;
+
+    if ~contains(status, 'Solved') || any(~isfinite(g_value)) || any(~isfinite(z_value))
+        info.solved = false;
+        info.breakReason = 'solver_failed_or_nonfinite';
+        stopNow = true;
+        g_new = g_prev;
+        return
+    end
+
+    g_new = full(g_value);
+    z_new = full(z_value);
+    thetaStep = norm([z_new; g_new] - [z_prev; g_prev]);
+    thetaNorm = max(1, norm([z_prev; g_prev]));
+    info.finalRelStep = thetaStep/thetaNorm;
+    if info.finalRelStep < mm.tol
+        info.converged = true;
+        info.breakReason = 'step_tolerance';
+        stopNow = true;
+    end
+    info.hitMaxIter = info.solved && iter == mm.maxIter && ~info.converged;
+    if info.hitMaxIter
+        info.breakReason = 'max_iter';
+    elseif ~stopNow
+        info.breakReason = 'continue';
+    end
 end
 
 function basis = correlated_covar_basis(k, var, cov_size, M)

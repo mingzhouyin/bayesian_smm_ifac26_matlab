@@ -57,6 +57,8 @@ function results = run_bayes_smm_mm_compare(cfg)
     hbMMIter = nan(Ne, 1);
     hbMMHitMaxIter = false(Ne, 1);
     hbMMFinalRelStep = nan(Ne, 1);
+    hbMMSolved = false(Ne, 1);
+    hbMMConverged = false(Ne, 1);
     hbRankGap = nan(Ne, 1);
     hbOriginalGradNorm = nan(Ne, 1);
     hbOriginalGradInfNorm = nan(Ne, 1);
@@ -158,6 +160,8 @@ function results = run_bayes_smm_mm_compare(cfg)
         hbMMIter(ii) = hbInfo.iter;
         hbMMHitMaxIter(ii) = hbInfo.hitMaxIter;
         hbMMFinalRelStep(ii) = hbInfo.finalRelStep;
+        hbMMSolved(ii) = hbInfo.solved;
+        hbMMConverged(ii) = hbInfo.converged;
         hbRankGap(ii) = trace(G_hat6) - sum(g_hat6.^2);
         [hbOriginalGradNorm(ii), hbOriginalGradInfNorm(ii)] = ...
             original_map_gradient_norm_generic(z_est6, g_hat6, model, dims, cfg, lambda_g);
@@ -213,7 +217,8 @@ function results = run_bayes_smm_mm_compare(cfg)
 
     results = build_results(cfg, dims, methodNames, errory, t_calc, ...
         ebMMIter, ebMMHitMaxIter, ebMMFinalRelStep, hbMMIter, ...
-        hbMMHitMaxIter, hbMMFinalRelStep, hbRankGap, hbOriginalGradNorm, ...
+        hbMMHitMaxIter, hbMMFinalRelStep, hbMMSolved, hbMMConverged, ...
+        hbRankGap, hbOriginalGradNorm, ...
         hbOriginalGradInfNorm, hbLaplaceDamping, hbLaplaceSolved, ...
         hbLaplaceDamped, hbLaplaceTime, hbMinEigHtheta, hbNumNegEigHtheta, ...
         hbMinEigJzz, hbMinEigJgg, hbMinEigSchurG, hbLaplaceCovTheta, ...
@@ -741,6 +746,7 @@ function [z_est, g_opt, G_opt, info] = hierarchical_bayes_mm(model, dims, cfg, b
     info.rankGap = nan(cfg.mm.maxIter, 1);
 
     for iter = 1:cfg.mm.maxIter
+        z_prev = z_est;
         % Observation and model residuals get separate Student-t weights
         % because they live in different dimensions and covariance spaces.
         B_prev = make_spd(trajectory_covar(g_prev, dims, cfg), cfg.mm.jitter);
@@ -780,14 +786,17 @@ function [z_est, g_opt, G_opt, info] = hierarchical_bayes_mm(model, dims, cfg, b
             info.solved = false;
             info.status = cvx_status;
             info.iter = iter;
+            info.breakReason = 'solver_failed_or_nonfinite';
             break
         end
 
         g_new = full(g);
-        z_est = full(z);
+        z_new = full(z);
+        z_est = z_new;
         G_opt = full(G);
         info.rankGap(iter) = trace(G_opt) - sum(g_new.^2);
-        [g_prev, info, stopNow] = update_mm_info(g_new, g_prev, cvx_status, cvx_optval, iter, cfg.mm, info);
+        [g_prev, info, stopNow] = update_mm_info_state(g_new, z_new, ...
+            g_prev, z_prev, cvx_status, cvx_optval, iter, cfg.mm, info);
         if stopNow
             break
         end
@@ -841,6 +850,7 @@ function info = init_mm_info(mm)
     info.finalRelStep = nan;
     info.converged = false;
     info.hitMaxIter = false;
+    info.breakReason = 'not_started';
 end
 
 function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval, iter, mm, info)
@@ -850,6 +860,7 @@ function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval
     stopNow = false;
     if ~contains(status, 'Solved') || any(~isfinite(g_value))
         info.solved = false;
+        info.breakReason = 'solver_failed_or_nonfinite';
         stopNow = true;
         g_new = g_prev;
         return
@@ -858,9 +869,48 @@ function [g_new, info, stopNow] = update_mm_info(g_value, g_prev, status, optval
     info.finalRelStep = norm(g_new - g_prev)/max(1, norm(g_prev));
     if info.finalRelStep < mm.tol
         info.converged = true;
+        info.breakReason = 'step_tolerance';
         stopNow = true;
     end
     info.hitMaxIter = info.solved && iter == mm.maxIter && ~info.converged;
+    if info.hitMaxIter
+        info.breakReason = 'max_iter';
+    elseif ~stopNow
+        info.breakReason = 'continue';
+    end
+end
+
+function [g_new, info, stopNow] = update_mm_info_state(g_value, z_value, ...
+        g_prev, z_prev, status, optval, iter, mm, info)
+    info.status = status;
+    info.obj(iter) = optval;
+    info.iter = iter;
+    stopNow = false;
+
+    if ~contains(status, 'Solved') || any(~isfinite(g_value)) || any(~isfinite(z_value))
+        info.solved = false;
+        info.breakReason = 'solver_failed_or_nonfinite';
+        stopNow = true;
+        g_new = g_prev;
+        return
+    end
+
+    g_new = full(g_value);
+    z_new = full(z_value);
+    thetaStep = norm([z_new; g_new] - [z_prev; g_prev]);
+    thetaNorm = max(1, norm([z_prev; g_prev]));
+    info.finalRelStep = thetaStep/thetaNorm;
+    if info.finalRelStep < mm.tol
+        info.converged = true;
+        info.breakReason = 'step_tolerance';
+        stopNow = true;
+    end
+    info.hitMaxIter = info.solved && iter == mm.maxIter && ~info.converged;
+    if info.hitMaxIter
+        info.breakReason = 'max_iter';
+    elseif ~stopNow
+        info.breakReason = 'continue';
+    end
 end
 
 %% Laplace covariance and gradients
@@ -1139,7 +1189,8 @@ end
 %% Result handling
 function results = build_results(cfg, dims, methodNames, errory, t_calc, ...
         ebMMIter, ebMMHitMaxIter, ebMMFinalRelStep, hbMMIter, ...
-        hbMMHitMaxIter, hbMMFinalRelStep, hbRankGap, hbOriginalGradNorm, ...
+        hbMMHitMaxIter, hbMMFinalRelStep, hbMMSolved, hbMMConverged, ...
+        hbRankGap, hbOriginalGradNorm, ...
         hbOriginalGradInfNorm, hbLaplaceDamping, hbLaplaceSolved, ...
         hbLaplaceDamped, hbLaplaceTime, hbMinEigHtheta, hbNumNegEigHtheta, ...
         hbMinEigJzz, hbMinEigJgg, hbMinEigSchurG, hbLaplaceCovTheta, ...
@@ -1165,6 +1216,8 @@ function results = build_results(cfg, dims, methodNames, errory, t_calc, ...
     mmSummary.hbMeanIter = mean(hbMMIter, 'omitnan');
     mmSummary.hbHitMaxIter = sum(hbMMHitMaxIter);
     mmSummary.hbMedianFinalRelStep = median(hbMMFinalRelStep, 'omitnan');
+    mmSummary.hbSolvedCount = sum(hbMMSolved);
+    mmSummary.hbConvergedCount = sum(hbMMConverged);
     mmSummary.hbMeanRankGap = mean(hbRankGap, 'omitnan');
     mmSummary.hbMedianRankGap = median(hbRankGap, 'omitnan');
 
@@ -1200,8 +1253,10 @@ function results = build_results(cfg, dims, methodNames, errory, t_calc, ...
     diagnostics = struct();
     diagnostics.mmIterations = table((1:Ne)', ebMMIter, ebMMHitMaxIter, ...
         ebMMFinalRelStep, hbMMIter, hbMMHitMaxIter, hbMMFinalRelStep, ...
+        hbMMSolved, hbMMConverged, ...
         'VariableNames', {'Experiment', 'EBIter', 'EBHitMaxIter', ...
-            'EBFinalRelStep', 'HBIter', 'HBHitMaxIter', 'HBFinalRelStep'});
+            'EBFinalRelStep', 'HBIter', 'HBHitMaxIter', 'HBFinalRelStep', ...
+            'HBSolved', 'HBConverged'});
     diagnostics.hessian = table((1:Ne)', hbLaplaceDamping, hbNumNegEigHtheta, ...
         hbMinEigHtheta, hbMinEigJzz, hbMinEigJgg, hbMinEigSchurG, ...
         hbOriginalGradNorm, hbOriginalGradInfNorm, hbRankGap, ...
@@ -1274,6 +1329,8 @@ function print_results(results)
     fprintf('HB-MM mean iterations: %.2f, hit maxIter: %d/%d, median final rel step: %.4g\n', ...
         results.mmSummary.hbMeanIter, results.mmSummary.hbHitMaxIter, Ne, ...
         results.mmSummary.hbMedianFinalRelStep);
+    fprintf('HB-MM solved/converged: %d/%d solved, %d/%d converged\n', ...
+        results.mmSummary.hbSolvedCount, Ne, results.mmSummary.hbConvergedCount, Ne);
     fprintf('HB-MM median rank gap trace(G)-||g||^2: %.4g\n', ...
         results.mmSummary.hbMedianRankGap);
     fprintf('\nPosterior covariance summary on target output\n');
