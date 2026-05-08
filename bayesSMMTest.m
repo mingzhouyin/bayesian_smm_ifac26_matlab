@@ -157,7 +157,7 @@ function cfg = base_unified_cfg(opts)
 end
 
 function resultsOut = run_unified_bayes_smm_task(cfg) %#ok<INUSD>
-    run('bayesSMMUnifiedMMCompare.m');
+    run('bayesSMMCompare.m');
     resultsOut = results;
 end
 

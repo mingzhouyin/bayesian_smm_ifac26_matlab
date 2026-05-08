@@ -1,4 +1,4 @@
-# Code supplement for M. Yin, A. Iannelli, S. A. Nazari, M. A. Müller, ``A unified Bayesian framework for data-driven smoothing, prediction, and control"
+# Code supplement for M. Yin, A. Iannelli, S. A. Nazari, M. A. Müller, “A unified Bayesian framework for data-driven smoothing, prediction, and control”
 
 ## Environment:
 - MATLAB R2025b
