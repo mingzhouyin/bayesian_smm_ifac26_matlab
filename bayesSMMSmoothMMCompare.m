@@ -7,7 +7,6 @@ clc; clear; close all;
 experimentSeed = 1;
 rng(experimentSeed);
 resultFile = fullfile(pwd, 'bayesSMMSmoothMMCompare_results.mat');
-showProgress = false;
 
 if exist('cvx_begin', 'file') == 0
     cvxDir = fullfile(getenv('USERPROFILE'), 'Documents', 'MATLAB', 'cvx');
@@ -87,10 +86,6 @@ idx_y_full = L*ny;
 covBasisY = toeplitz_covar_basis(y_data_var, idx_y_full);
 
 for ii = 1:Ne
-    if showProgress
-        fprintf('Experiment %d/%d\n', ii, Ne);
-    end
-
     %% Define system
     trueSys = drss(nx, ny, nu);
     trueSys.D = 0;
@@ -239,7 +234,6 @@ settings.script = mfilename;
 settings.generatedAt = char(datetime('now'));
 settings.resultFile = resultFile;
 settings.seed = experimentSeed;
-settings.showProgress = showProgress;
 settings.Ne = Ne;
 settings.methodNames = methodNames;
 settings.nx = nx;

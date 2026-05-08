@@ -9,6 +9,7 @@
 clc; clear; close all;
 experimentSeed = 3;
 rng(experimentSeed);
+resultFile = fullfile(pwd, 'bayesSMMPredictMMCompare_results.mat');
 
 if exist('cvx_begin', 'file') == 0
     cvxDir = fullfile(getenv('USERPROFILE'), 'Documents', 'MATLAB', 'cvx');
@@ -72,15 +73,6 @@ ebMMFinalRelStep = nan(Ne, 1);
 hbMMIter = nan(Ne, 1);
 hbMMHitMaxIter = false(Ne, 1);
 hbMMFinalRelStep = nan(Ne, 1);
-hbEta0RankGap = nan(Ne, 1);
-hbEta0OriginalGradNorm = nan(Ne, 1);
-hbEta0OriginalGradInfNorm = nan(Ne, 1);
-hbEta0MinEigHtheta = nan(Ne, 1);
-hbEta0NumNegEigHtheta = nan(Ne, 1);
-hbEta0Damping = nan(Ne, 1);
-hbEta0Iter = nan(Ne, 1);
-hbEta0HitMaxIter = false(Ne, 1);
-hbEta0FinalRelStep = nan(Ne, 1);
 
 %% Parameters
 nx = 10;    % States
@@ -99,8 +91,6 @@ mm.maxIter = 100;
 mm.tol = 1e-3;
 mm.eta = 1e-4;
 mm.jitter = 1e-9;
-runEtaZeroDiagnostic = false;
-etaZeroOnlyWhenDamped = true;
 
 idx_u = L * nu;
 idx_y = L * ny;
@@ -111,8 +101,6 @@ covBasisYp = toeplitz_covar_basis(y_data_var, idx_yp);
 covBasisY = toeplitz_covar_basis(y_data_var, idx_y);
 
 for ii = 1:Ne
-    fprintf('Experiment %d/%d\n', ii, Ne);
-
     %% Define system
     trueSys = drss(nx, ny, nu);
     trueSys.D = 0;
@@ -263,28 +251,6 @@ for ii = 1:Ne
     [covCompareTraceRatioYf(ii, 2), covCompareMedianDiagRatioYf(ii, 2), ...
         covCompareRelFrobYf(ii, 2)] = covariance_compare(hbLaplaceCovYf{ii}, ebMMCondCovYf{ii});
 
-    runEtaZeroThisExperiment = runEtaZeroDiagnostic && ...
-        (~etaZeroOnlyWhenDamped || hbLaplaceDamped(ii));
-    if runEtaZeroThisExperiment
-        mmEta0 = mm;
-        mmEta0.eta = 0;
-        [~, z_eta0, g_eta0, G_eta0, hbEta0Info] = hierarchical_bayes_mm_predict(zetam, H, ...
-            sigma_m, g0, hb.lambda_g, u_data_var, y_data_var, idx_u, idx_yp, idx_y, ...
-            covBasisU, covBasisY, mmEta0);
-        hbEta0RankGap(ii) = trace(G_eta0) - sum(g_eta0.^2);
-        [hbEta0OriginalGradNorm(ii), hbEta0OriginalGradInfNorm(ii)] = ...
-            original_map_gradient_norm(z_eta0, g_eta0, zetam, H, sigma_m, hb.lambda_g, ...
-            u_data_var, y_data_var, idx_u, idx_yp, idx_y, mm.jitter);
-        [~, ~, eta0LaplaceInfo] = laplace_posterior_covariance(z_eta0, g_eta0, H, ...
-            sigma_m, hb.lambda_g, u_data_var, y_data_var, idx_u, idx_yp, idx_y, idx_yf, mm.jitter);
-        hbEta0MinEigHtheta(ii) = eta0LaplaceInfo.minEigHtheta;
-        hbEta0NumNegEigHtheta(ii) = eta0LaplaceInfo.numNegEigHtheta;
-        hbEta0Damping(ii) = eta0LaplaceInfo.damping;
-        hbEta0Iter(ii) = hbEta0Info.iter;
-        hbEta0HitMaxIter(ii) = hbEta0Info.hitMaxIter;
-        hbEta0FinalRelStep(ii) = hbEta0Info.finalRelStep;
-    end
-
     if ~ebInfo.solved
         warning('EmpBayes-MM did not fully solve in experiment %d. Last CVX status: %s', ...
             ii, ebInfo.status);
@@ -303,108 +269,160 @@ for ii = 1:Ne
 end
 
 %% Results
-fprintf('\nExperiment settings\n');
-fprintf('Seed: %d\n', experimentSeed);
-fprintf('Ne: %d\n', Ne);
-fprintf('MM maxIter: %d\n', mm.maxIter);
-fprintf('MM tol: %.4g\n', mm.tol);
-fprintf('MM eta: %.4g\n', mm.eta);
+settings = struct();
+settings.script = mfilename;
+settings.generatedAt = char(datetime('now'));
+settings.resultFile = resultFile;
+settings.seed = experimentSeed;
+settings.Ne = Ne;
+settings.methodNames = methodNames;
+settings.nx = nx;
+settings.nu = nu;
+settings.ny = ny;
+settings.N = N;
+settings.L = L;
+settings.M = M;
+settings.LL = LL;
+settings.u_data_var = u_data_var;
+settings.y_data_var = y_data_var;
+settings.u_var = u_var;
+settings.y_var = y_var;
+settings.mm = mm;
 
+rmseSummary = table(methodNames(:), median(errory, 1)', mean(errory, 1)', ...
+    mean(t_calc, 1)', 'VariableNames', ...
+    {'Method', 'MedianRMSE', 'MeanRMSE', 'MeanTimeSec'});
+
+mmSummary = struct();
+mmSummary.ebMeanIter = mean(ebMMIter, 'omitnan');
+mmSummary.ebHitMaxIter = sum(ebMMHitMaxIter);
+mmSummary.ebMedianFinalRelStep = median(ebMMFinalRelStep, 'omitnan');
+mmSummary.hbMeanIter = mean(hbMMIter, 'omitnan');
+mmSummary.hbHitMaxIter = sum(hbMMHitMaxIter);
+mmSummary.hbMedianFinalRelStep = median(hbMMFinalRelStep, 'omitnan');
+mmSummary.hbMeanRankGap = mean(hbRankGap, 'omitnan');
+mmSummary.hbMedianRankGap = median(hbRankGap, 'omitnan');
+
+laplaceSummary = struct();
+laplaceSummary.meanStdYf = mean(hbLaplaceMeanStdYf, 'omitnan');
+laplaceSummary.medianStdYf = median(hbLaplaceMeanStdYf, 'omitnan');
+laplaceSummary.meanTimeSec = mean(hbLaplaceTime, 'omitnan');
+laplaceSummary.undampedFraction = mean(hbLaplaceSolved);
+laplaceSummary.dampedCount = sum(hbLaplaceDamped);
+laplaceSummary.meanDamping = mean(hbLaplaceDamping, 'omitnan');
+laplaceSummary.maxDamping = max(hbLaplaceDamping);
+laplaceSummary.coverageZ90 = mean(hbLaplaceZ90Inside);
+laplaceSummary.coverageZ90Count = sum(hbLaplaceZ90Inside);
+laplaceSummary.coverageYf90 = mean(hbLaplaceYf90Inside);
+laplaceSummary.coverageYf90Count = sum(hbLaplaceYf90Inside);
+laplaceSummary.medianZMahalanobisRatio90 = ...
+    median(hbLaplaceZ90Stat./hbLaplaceZ90Threshold, 'omitnan');
+laplaceSummary.medianYfMahalanobisRatio90 = ...
+    median(hbLaplaceYf90Stat./hbLaplaceYf90Threshold, 'omitnan');
+
+covarianceSummary = table( ...
+    {'Laplace HB'; 'EB conditioned on fmincon g'; 'EB conditioned on EB-MM g'}, ...
+    [mean(hbLaplaceMeanStdYf, 'omitnan'); ...
+        mean(ebCondMeanStdYf, 'omitnan'); ...
+        mean(ebMMCondMeanStdYf, 'omitnan')], ...
+    [mean(hbLaplaceYf90Inside); mean(ebCondYf90Inside); mean(ebMMCondYf90Inside)], ...
+    [sum(hbLaplaceYf90Inside); sum(ebCondYf90Inside); sum(ebMMCondYf90Inside)], ...
+    'VariableNames', {'Covariance', 'MeanStd', 'Coverage90', 'Coverage90Count'});
+covarianceComparison = table( ...
+    {'Laplace/EB-fmincon'; 'Laplace/EB-MM'}, ...
+    mean(covCompareTraceRatioYf, 1, 'omitnan')', ...
+    median(covCompareMedianDiagRatioYf, 1, 'omitnan')', ...
+    mean(covCompareRelFrobYf, 1, 'omitnan')', ...
+    'VariableNames', {'Comparison', 'MeanTraceRatio', ...
+        'MedianDiagRatio', 'MeanRelFrobDiff'});
+
+diagnostics = struct();
+diagnostics.mmIterations = table((1:Ne)', ebMMIter, ebMMHitMaxIter, ...
+    ebMMFinalRelStep, hbMMIter, hbMMHitMaxIter, hbMMFinalRelStep, ...
+    'VariableNames', {'Experiment', 'EBIter', 'EBHitMaxIter', ...
+        'EBFinalRelStep', 'HBIter', 'HBHitMaxIter', 'HBFinalRelStep'});
+diagnostics.hessian = table((1:Ne)', hbLaplaceDamping, hbNumNegEigHtheta, ...
+    hbMinEigHtheta, hbMinEigJzz, hbMinEigJgg, hbMinEigSchurG, ...
+    hbOriginalGradNorm, hbOriginalGradInfNorm, hbRankGap, ...
+    'VariableNames', {'Experiment', 'Damping', 'NumNegEigHtheta', ...
+        'MinEigHtheta', 'MinEigJzz', 'MinEigJgg', 'MinEigSchurG', ...
+        'OriginalGradNorm', 'OriginalGradInfNorm', 'RankGap'});
+diagnostics.coverage = struct( ...
+    'hbLaplaceZ90Inside', hbLaplaceZ90Inside, ...
+    'hbLaplaceZ90Stat', hbLaplaceZ90Stat, ...
+    'hbLaplaceZ90Threshold', hbLaplaceZ90Threshold, ...
+    'hbLaplaceYf90Inside', hbLaplaceYf90Inside, ...
+    'hbLaplaceYf90Stat', hbLaplaceYf90Stat, ...
+    'hbLaplaceYf90Threshold', hbLaplaceYf90Threshold, ...
+    'ebCondYf90Inside', ebCondYf90Inside, ...
+    'ebCondYf90Stat', ebCondYf90Stat, ...
+    'ebCondYf90Threshold', ebCondYf90Threshold, ...
+    'ebMMCondYf90Inside', ebMMCondYf90Inside, ...
+    'ebMMCondYf90Stat', ebMMCondYf90Stat, ...
+    'ebMMCondYf90Threshold', ebMMCondYf90Threshold);
+diagnostics.covarianceComparison = struct( ...
+    'traceRatioYf', covCompareTraceRatioYf, ...
+    'medianDiagRatioYf', covCompareMedianDiagRatioYf, ...
+    'relFrobYf', covCompareRelFrobYf);
+
+posterior = struct();
+posterior.hbLaplaceCovTheta = hbLaplaceCovTheta;
+posterior.hbLaplaceCovZ = hbLaplaceCovZ;
+posterior.hbLaplaceCovYf = hbLaplaceCovYf;
+posterior.ebCondCovZ = ebCondCovZ;
+posterior.ebCondCovYf = ebCondCovYf;
+posterior.ebMMCondCovZ = ebMMCondCovZ;
+posterior.ebMMCondCovYf = ebMMCondCovYf;
+
+results = struct();
+results.settings = settings;
+results.rmseSummary = rmseSummary;
+results.mmSummary = mmSummary;
+results.laplaceSummary = laplaceSummary;
+results.covarianceSummary = covarianceSummary;
+results.covarianceComparison = covarianceComparison;
+results.diagnostics = diagnostics;
+results.posterior = posterior;
+results.errory = errory;
+results.t_calc = t_calc;
+
+save(resultFile, 'results');
+
+fprintf('\nPrediction MM comparison settings\n');
+fprintf('Seed: %d, Ne: %d, MM maxIter: %d, tol: %.4g, eta: %.4g\n', ...
+    experimentSeed, Ne, mm.maxIter, mm.tol, mm.eta);
 fprintf('\nPrediction RMSE summary\n');
 fprintf('%16s %12s %12s %12s\n', 'Method', 'Median', 'Mean', 'Time [s]');
 for jj = 1:numMethods
     fprintf('%16s %12.4g %12.4g %12.4g\n', methodNames{jj}, ...
-        median(errory(:, jj)), mean(errory(:, jj)), mean(t_calc(:, jj)));
+        rmseSummary.MedianRMSE(jj), rmseSummary.MeanRMSE(jj), ...
+        rmseSummary.MeanTimeSec(jj));
 end
-fprintf('\nHierBayes-MM Laplace posterior covariance summary\n');
-fprintf('Mean future-output posterior std: %.4g\n', mean(hbLaplaceMeanStdYf));
-fprintf('Median future-output posterior std: %.4g\n', median(hbLaplaceMeanStdYf));
-fprintf('Mean Laplace covariance time [s]: %.4g\n', mean(hbLaplaceTime));
-fprintf('Undamped Hessian fraction: %.2f\n', mean(hbLaplaceSolved));
-fprintf('Damped Hessian count: %d/%d\n', sum(hbLaplaceDamped), Ne);
-fprintf('Mean Hessian damping: %.4g\n', mean(hbLaplaceDamping));
-fprintf('Max Hessian damping: %.4g\n', max(hbLaplaceDamping));
-fprintf('Mean SDP rank gap trace(G)-||g||^2: %.4g\n', mean(hbRankGap));
-fprintf('Median SDP rank gap trace(G)-||g||^2: %.4g\n', median(hbRankGap));
-fprintf('Mean original MAP gradient norm: %.4g\n', mean(hbOriginalGradNorm));
-fprintf('Median original MAP gradient norm: %.4g\n', median(hbOriginalGradNorm));
-fprintf('Median original MAP gradient inf-norm: %.4g\n', median(hbOriginalGradInfNorm));
+fprintf('\nMM convergence summary\n');
 fprintf('EB-MM mean iterations: %.2f, hit maxIter: %d/%d, median final rel step: %.4g\n', ...
-    mean(ebMMIter), sum(ebMMHitMaxIter), Ne, median(ebMMFinalRelStep, 'omitnan'));
+    mmSummary.ebMeanIter, mmSummary.ebHitMaxIter, Ne, mmSummary.ebMedianFinalRelStep);
 fprintf('HB-MM mean iterations: %.2f, hit maxIter: %d/%d, median final rel step: %.4g\n', ...
-    mean(hbMMIter), sum(hbMMHitMaxIter), Ne, median(hbMMFinalRelStep, 'omitnan'));
-fprintf('Full trajectory 90%% ellipsoid coverage: %.2f (%d/%d)\n', ...
-    mean(hbLaplaceZ90Inside), sum(hbLaplaceZ90Inside), Ne);
-fprintf('Future output 90%% ellipsoid coverage: %.2f (%d/%d)\n', ...
-    mean(hbLaplaceYf90Inside), sum(hbLaplaceYf90Inside), Ne);
-fprintf('Median full trajectory Mahalanobis/threshold: %.4g\n', ...
-    median(hbLaplaceZ90Stat./hbLaplaceZ90Threshold));
-fprintf('Median future output Mahalanobis/threshold: %.4g\n', ...
-    median(hbLaplaceYf90Stat./hbLaplaceYf90Threshold));
+    mmSummary.hbMeanIter, mmSummary.hbHitMaxIter, Ne, mmSummary.hbMedianFinalRelStep);
+fprintf('HB-MM median rank gap trace(G)-||g||^2: %.4g\n', mmSummary.hbMedianRankGap);
 
-fprintf('\nPosterior covariance comparison on future output y_f\n');
+fprintf('\nPosterior covariance summary on future output y_f\n');
 fprintf('%28s %12s %12s\n', 'Covariance', 'MeanStd', 'Coverage90');
-fprintf('%28s %12.4g %9.2f (%d/%d)\n', 'Laplace HB', ...
-    mean(hbLaplaceMeanStdYf), mean(hbLaplaceYf90Inside), sum(hbLaplaceYf90Inside), Ne);
-fprintf('%28s %12.4g %9.2f (%d/%d)\n', 'EB conditioned on fmincon g', ...
-    mean(ebCondMeanStdYf), mean(ebCondYf90Inside), sum(ebCondYf90Inside), Ne);
-fprintf('%28s %12.4g %9.2f (%d/%d)\n', 'EB conditioned on EB-MM g', ...
-    mean(ebMMCondMeanStdYf), mean(ebMMCondYf90Inside), sum(ebMMCondYf90Inside), Ne);
+for jj = 1:height(covarianceSummary)
+    fprintf('%28s %12.4g %9.2f (%d/%d)\n', covarianceSummary.Covariance{jj}, ...
+        covarianceSummary.MeanStd(jj), covarianceSummary.Coverage90(jj), ...
+        covarianceSummary.Coverage90Count(jj), Ne);
+end
+fprintf('HB full trajectory 90%% coverage: %.2f (%d/%d)\n', ...
+    laplaceSummary.coverageZ90, laplaceSummary.coverageZ90Count, Ne);
+fprintf('Laplace covariance time [s]: mean %.4g; damped Hessian count: %d/%d\n', ...
+    laplaceSummary.meanTimeSec, laplaceSummary.dampedCount, Ne);
 fprintf('Laplace/EB-fmincon trace ratio: %.4g, median diag ratio: %.4g, rel Frobenius diff: %.4g\n', ...
-    mean(covCompareTraceRatioYf(:, 1), 'omitnan'), ...
-    median(covCompareMedianDiagRatioYf(:, 1), 'omitnan'), ...
-    mean(covCompareRelFrobYf(:, 1), 'omitnan'));
+    covarianceComparison.MeanTraceRatio(1), covarianceComparison.MedianDiagRatio(1), ...
+    covarianceComparison.MeanRelFrobDiff(1));
 fprintf('Laplace/EB-MM trace ratio: %.4g, median diag ratio: %.4g, rel Frobenius diff: %.4g\n', ...
-    mean(covCompareTraceRatioYf(:, 2), 'omitnan'), ...
-    median(covCompareMedianDiagRatioYf(:, 2), 'omitnan'), ...
-    mean(covCompareRelFrobYf(:, 2), 'omitnan'));
-
-fprintf('\nLaplace Hessian diagnostics by experiment\n');
-fprintf('%4s %10s %7s %11s %11s %11s %11s %10s %10s\n', ...
-    'Exp', 'Damping', 'NegEig', 'minEig(H)', 'minEig(Jzz)', ...
-    'minEig(Jgg)', 'minEig(Sg)', 'GradNorm', 'RankGap');
-for jj = 1:Ne
-    fprintf('%4d %10.4g %7d %11.4g %11.4g %11.4g %11.4g %10.4g %10.4g\n', ...
-        jj, hbLaplaceDamping(jj), hbNumNegEigHtheta(jj), hbMinEigHtheta(jj), ...
-        hbMinEigJzz(jj), hbMinEigJgg(jj), hbMinEigSchurG(jj), ...
-        hbOriginalGradNorm(jj), hbRankGap(jj));
-end
-
-fprintf('\nMM iteration diagnostics by experiment\n');
-fprintf('%4s %8s %8s %12s %8s %8s %12s\n', ...
-    'Exp', 'EBIter', 'EBHit', 'EBRelStep', 'HBIter', 'HBHit', 'HBRelStep');
-for jj = 1:Ne
-    fprintf('%4d %8d %8d %12.4g %8d %8d %12.4g\n', ...
-        jj, ebMMIter(jj), ebMMHitMaxIter(jj), ebMMFinalRelStep(jj), ...
-        hbMMIter(jj), hbMMHitMaxIter(jj), hbMMFinalRelStep(jj));
-end
-
-if runEtaZeroDiagnostic
-    eta0Valid = ~isnan(hbEta0RankGap);
-    fprintf('\nHB-MM eta=0 diagnostic summary\n');
-    fprintf('Eta=0 diagnostic runs: %d/%d\n', sum(eta0Valid), Ne);
-    if any(eta0Valid)
-        fprintf('Mean rank gap trace(G)-||g||^2: %.4g\n', mean(hbEta0RankGap, 'omitnan'));
-        fprintf('Median rank gap trace(G)-||g||^2: %.4g\n', median(hbEta0RankGap, 'omitnan'));
-        fprintf('Mean original MAP gradient norm: %.4g\n', mean(hbEta0OriginalGradNorm, 'omitnan'));
-        fprintf('Median original MAP gradient norm: %.4g\n', median(hbEta0OriginalGradNorm, 'omitnan'));
-        fprintf('Damped Hessian count: %d/%d\n', sum(hbEta0Damping(eta0Valid) > 0), sum(eta0Valid));
-        fprintf('Mean Hessian damping: %.4g\n', mean(hbEta0Damping, 'omitnan'));
-        fprintf('Mean iterations: %.2f, hit maxIter: %d/%d, median final rel step: %.4g\n', ...
-            mean(hbEta0Iter, 'omitnan'), sum(hbEta0HitMaxIter(eta0Valid)), ...
-            sum(eta0Valid), median(hbEta0FinalRelStep, 'omitnan'));
-
-        fprintf('\nHB-MM eta=0 diagnostics by experiment\n');
-        fprintf('%4s %10s %7s %11s %10s %10s %8s %12s\n', ...
-            'Exp', 'Damping', 'NegEig', 'minEig(H)', 'GradNorm', 'RankGap', 'Iter', 'RelStep');
-        for jj = find(eta0Valid)'
-            fprintf('%4d %10.4g %7d %11.4g %10.4g %10.4g %8d %12.4g\n', ...
-                jj, hbEta0Damping(jj), hbEta0NumNegEigHtheta(jj), hbEta0MinEigHtheta(jj), ...
-                hbEta0OriginalGradNorm(jj), hbEta0RankGap(jj), hbEta0Iter(jj), ...
-                hbEta0FinalRelStep(jj));
-        end
-    end
-end
+    covarianceComparison.MeanTraceRatio(2), covarianceComparison.MedianDiagRatio(2), ...
+    covarianceComparison.MeanRelFrobDiff(2));
+fprintf('\nSaved results: %s\n', resultFile);
 
 figure(10)
 groupIdx = repelem(1:numMethods, Ne)';

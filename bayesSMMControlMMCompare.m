@@ -258,7 +258,7 @@ for ii = 1:Ne
     hbRankGap(ii) = trace(G_hat6) - sum(g_hat6.^2);
 
     refineTic = tic;
-    [z_lap6, g_lap6, refineInfo] = refine_control_joint_map(z_hat6, g_hat6, ...
+    [z_lap6, g_lap6, refineInfo] = refine_control_joint_map(g_hat6, ...
         [y_dist; yref], Hy, Hup, Huf, u_dist, uref, lambda_g, sigma_y_m, ...
         r, k, var, idx_y, mm.jitter, options);
     hbMapRefineTime(ii) = toc(refineTic);
@@ -648,13 +648,10 @@ function [gradNorm, gradInfNorm, grad] = original_map_gradient_norm_control(z_ha
     gradInfNorm = norm(grad, inf);
 end
 
-function [z_ref, g_ref, info] = refine_control_joint_map(z_init, g_init, zetay, ...
+function [z_ref, g_ref, info] = refine_control_joint_map(g_init, zetay, ...
         H, Aeq, Huf, u_dist, uref, lambda_g, sigma_y_m, r, k, var, idx_y, ...
         jitter, options)
-    theta0 = [z_init; g_init];
-    ntheta = length(theta0);
-    AeqTheta = [zeros(size(Aeq, 1), idx_y), Aeq];
-    obj = @(theta) control_joint_map_objective(theta, zetay, H, Huf, uref, ...
+    obj = @(g) control_profiled_map_objective(g, zetay, H, Huf, uref, ...
         lambda_g, sigma_y_m, r, k, var, idx_y, jitter);
     mapOptions = optimoptions(options, 'SpecifyObjectiveGradient', true, ...
         'Display', 'off');
@@ -662,13 +659,13 @@ function [z_ref, g_ref, info] = refine_control_joint_map(z_init, g_init, zetay, 
     info.exitflag = -999;
     info.iterations = NaN;
     info.firstorderopt = NaN;
-    theta_ref = theta0;
-    f0 = obj(theta0);
+    g_ref = g_init;
+    f0 = obj(g_init);
     try
-        [theta_try, f_try, exitflag, output] = fmincon(obj, theta0, [], [], ...
-            AeqTheta, u_dist, [], [], [], mapOptions);
-        if all(isfinite(theta_try)) && isfinite(f_try) && f_try <= f0*(1 + 1e-8)
-            theta_ref = theta_try;
+        [g_try, f_try, exitflag, output] = fmincon(obj, g_init, [], [], ...
+            Aeq, u_dist, [], [], [], mapOptions);
+        if all(isfinite(g_try)) && isfinite(f_try) && f_try <= f0*(1 + 1e-8)
+            g_ref = g_try;
         end
         info.exitflag = exitflag;
         if isfield(output, 'iterations')
@@ -678,19 +675,17 @@ function [z_ref, g_ref, info] = refine_control_joint_map(z_init, g_init, zetay, 
             info.firstorderopt = output.firstorderopt;
         end
     catch
-        theta_ref = theta0;
+        g_ref = g_init;
     end
 
-    z_ref = theta_ref(1:idx_y);
-    g_ref = theta_ref(idx_y+1:ntheta);
+    z_ref = control_conditional_map_z(g_ref, zetay, H, sigma_y_m, k, var, ...
+        idx_y, jitter);
 end
 
-function [f, grad] = control_joint_map_objective(theta, zetay, H, Huf, uref, ...
+function [f, grad] = control_profiled_map_objective(g, zetay, H, Huf, uref, ...
         lambda_g, sigma_y_m, r, k, var, idx_y, jitter)
-    z = theta(1:idx_y);
-    g = theta(idx_y+1:end);
     M = length(g);
-
+    z = control_conditional_map_z(g, zetay, H, sigma_y_m, k, var, idx_y, jitter);
     S = make_spd(covar_data(g, k, var, idx_y), jitter);
     P = S\eye(idx_y);
     a = z - H*g;
@@ -705,14 +700,20 @@ function [f, grad] = control_joint_map_objective(theta, zetay, H, Huf, uref, ...
 
     if nargout > 1
         C = P - b*b';
-        grad_z = R*obs_res + b;
         grad_g = -H'*b + r*Huf'*u_res + (1/lambda_g)*g;
         for ii = 1:M
             Si = covar_data_gradient_corr(g, ii, k, var, idx_y);
             grad_g(ii) = grad_g(ii) + 0.5*trace(C*Si);
         end
-        grad = [grad_z; grad_g];
+        grad = grad_g;
     end
+end
+
+function z = control_conditional_map_z(g, zetay, H, sigma_y_m, k, var, idx_y, jitter)
+    S = make_spd(covar_data(g, k, var, idx_y), jitter);
+    P = S\eye(idx_y);
+    R = sigma_y_m\eye(idx_y);
+    z = make_spd(R + P, jitter)\(R*zetay + P*(H*g));
 end
 
 function cov_z = empirical_bayes_posterior_covariance_control(g_hat, sigma_y_m, ...

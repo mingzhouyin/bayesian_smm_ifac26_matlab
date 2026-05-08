@@ -1,4 +1,0 @@
-diary my_output.txt
-%bayesSMMSmoothMMCompare
-%bayesSMMPredictMMCompare
-bayesSMMControlMMCompare
