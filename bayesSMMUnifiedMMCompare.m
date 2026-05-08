@@ -118,8 +118,8 @@ function results = run_bayes_smm_mm_compare(cfg)
         ebCondCovTarget{ii} = ebCondCovZ{ii}(model.targetIdx, model.targetIdx);
         ebCondMeanStdTarget(ii) = mean_std_from_cov(ebCondCovTarget{ii});
 
-        % Convex baseline uses the same observation model with a fixed
-        % regularization weight instead of marginal-likelihood optimization.
+        % Convex SQP baseline iterates the quadratic approximation from
+        % extended.tex until the coefficient update is small.
         tic
         g_hat2 = convex_baseline_g(g0, model, dims, cfg, mm.jitter);
         z_est2 = posterior_given_g(g_hat2, model, dims, cfg, options);
@@ -257,6 +257,9 @@ function cfg = default_bayes_smm_mm_compare_config()
     cfg.mm.tol = 1e-3;
     cfg.mm.eta = 1e-4;
     cfg.mm.jitter = 1e-9;
+    cfg.sqp.maxIter = 100;
+    cfg.sqp.tol = 1e-6;
+    cfg.sqp.minRegularization = 1e-9;
     cfg.optim.Algorithm = 'interior-point';
     cfg.optim.StepTolerance = 1e-14;
     cfg.optim.MaxFunctionEvaluations = 1e5;
@@ -454,6 +457,7 @@ function model = build_task_model(cfg, dims, data)
     model.beqG = beqG;
     model.hasExactZ = ~isempty(exactIdx);
     model.hasExactG = hasExactG;
+    model.freeZDim = dims.nz - size(Cz, 1);
     model.task = cfg.task;
 end
 
@@ -529,26 +533,44 @@ function value = marginal_objective(g, model, dims, cfg)
 end
 
 function g = convex_baseline_g(g0, model, dims, cfg, jitter)
-    W = model.SigmaE\eye(size(model.SigmaE));
-    lambda = convex_regularization(g0, model, dims, cfg);
-    Q = model.PhiH'*W*model.PhiH + lambda*eye(dims.M);
-    c = model.PhiH'*W*model.zeta;
-    g = solve_model_quadratic(Q, c, model, jitter);
+    g = g0;
+    iter = 0;
+    relStep = inf;
+    while iter < cfg.sqp.maxIter && relStep > cfg.sqp.tol
+        iter = iter + 1;
+        [Q, c] = convex_sqp_quadratic_model(g, model, dims, cfg, jitter);
+        gNext = solve_model_quadratic(Q, c, model, jitter);
+        relStep = norm(gNext - g)/max(1, norm(g));
+        g = gNext;
+    end
 end
 
-function lambda = convex_regularization(g0, model, dims, cfg)
-    if strcmpi(cfg.task, 'smooth') && ~cfg.noise.inputNoise
-        lambda = dims.L*cfg.noise.y_data_var/cfg.noise.y_var;
-    elseif strcmpi(cfg.task, 'predict') && cfg.noise.inputNoise
-        lambda1 = 1/(sum(g0.^2)*cfg.noise.y_data_var + cfg.noise.y_var);
-        lambda2 = 1/(sum(g0.^2)*cfg.noise.u_data_var + cfg.noise.u_var);
-        lambda = dims.nx*cfg.noise.y_data_var*lambda1 ...
-            + dims.L*cfg.noise.u_data_var*lambda2;
-    else
-        S0 = trajectory_covar(g0, dims, cfg);
-        lambda = trace(model.Phi*S0*model.Phi')/max(numel(model.zeta), 1);
+function [Q, c] = convex_sqp_quadratic_model(g, model, dims, cfg, jitter)
+    Lambda = sqp_observation_data_covariance(model, dims, cfg);
+    Psi = sum(g.^2)*Lambda + model.SigmaE;
+    Psi = make_spd(Psi, jitter);
+    W = Psi\eye(size(Psi));
+
+    residual = model.zeta - model.PhiH*g;
+    weightedResidual = W*residual;
+    regularization = real(trace(Lambda*W) - weightedResidual'*Lambda*weightedResidual);
+    regularizationFloor = max(cfg.sqp.minRegularization, jitter);
+    if ~isfinite(regularization)
+        regularization = regularizationFloor;
     end
-    lambda = max(lambda, cfg.mm.jitter);
+    regularization = max(regularization, regularizationFloor);
+
+    Q = model.PhiH'*W*model.PhiH + regularization*eye(dims.M);
+    c = model.PhiH'*W*model.zeta;
+end
+
+function Lambda = sqp_observation_data_covariance(model, dims, cfg)
+    % Under the Page/zero-lag approximation used by the SQP derivation,
+    % trajectory uncertainty is ||g||^2 times the selected data covariance.
+    dataVariance = [effective_var(cfg, 'u_data')*ones(dims.idx_u, 1); ...
+        cfg.noise.y_data_var*ones(dims.idx_y, 1)];
+    Lambda = model.Phi*diag(dataVariance)*model.Phi';
+    Lambda = (Lambda + Lambda')/2;
 end
 
 function z = subspace_baseline(~, data, dims, cfg)
@@ -629,7 +651,7 @@ function [z_est, cov_z] = posterior_given_g(g, model, dims, cfg, options, z_init
         [], [], [], options);
     Hzz = posterior_z_hessian_elliptical(z_est, g, model, S, cfg);
     cov_z = constrained_covariance_from_hessian(Hzz, model.Cz, cfg.mm.jitter);
-    cov_z = elliptical_t_laplace_scale(cfg.noise.dof, dims.nz)*cov_z;
+    cov_z = distribution_laplace_scale(cfg, model.freeZDim)*cov_z;
 end
 
 function value = posterior_z_objective_student_t(z, g, model, S, cfg)
@@ -846,7 +868,7 @@ function [cov_z, cov_theta, info] = laplace_posterior_covariance_generic(z, g, m
     % Laplace covariance of theta = [z; g] around the HB-MM solution. Exact
     % z/g constraints are projected out before inverting the Hessian.
     [Jzz, Jzg, Jgg] = hierarchical_hessian(z, g, model, dims, cfg, lambda_g);
-    scale = distribution_laplace_scale(cfg, dims.nz);
+    scale = distribution_laplace_scale(cfg, model.freeZDim);
     Htheta = [Jzz Jzg; Jzg' Jgg];
     Htheta = (Htheta + Htheta')/2;
     Ctheta = blkdiag(model.Cz, model.AeqG);
